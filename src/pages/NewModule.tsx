@@ -51,9 +51,13 @@ export default function NewModule() {
 
   const activeTable = tables.find(t => t.id === activeTableId) || tables[0];
 
-  const generateDbName = (label: string) => 
-    label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '_');
+  // GERA NOME SEGURO PARA O BANCO
+  const generateDbName = (label: string) => {
+    const clean = label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '_');
+    return clean || `campo_${Math.floor(Math.random() * 10000)}`;
+  };
 
+  // HELPERS DE TABELA
   const addTable = (tableName = `Nova Tabela ${tables.length + 1}`, initialFields: any[] = [], initialRows: any[] = []) => {
     const newId = crypto.randomUUID();
     setTables([...tables, { id: newId, name: tableName, fields: initialFields, rows: initialRows }]);
@@ -77,7 +81,23 @@ export default function NewModule() {
   const removeField = (id: string) => { setTables(tables.map(t => t.id === activeTableId ? { ...t, fields: t.fields.filter(f => f.id !== id) } : t)); };
   const handleReorder = (newOrder: any[]) => { setTables(tables.map(t => t.id === activeTableId ? { ...t, fields: newOrder } : t)); };
 
-  // --- CSV Import Logic ---
+  const handleAddOption = (fieldId: string) => {
+    const input = document.getElementById(`opt-${fieldId}`) as HTMLInputElement;
+    if (input && input.value.trim()) {
+      const val = input.value.trim();
+      const slug = generateDbName(val);
+      const currentField = activeTable.fields.find(f => f.id === fieldId);
+      const currentOptions = currentField?.options || [];
+      if (currentOptions.some((opt: any) => opt.value === slug)) {
+        toast.error("Esta opção já existe!");
+        return;
+      }
+      updateField(fieldId, 'options', [...currentOptions, { label: val, value: slug }]);
+      input.value = '';
+    }
+  };
+
+  // --- LÓGICA DO CSV ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -131,6 +151,21 @@ export default function NewModule() {
       if (action === 'new') {
         const config = columnConfigs[header];
         let options: any[] = [];
+
+        // Extrai opções únicas se o usuário marcou o checkbox
+        if (config.type === 'select' && config.extractOptions) {
+            const uniqueValues = new Set<string>();
+            for (const row of csvData.rows) {
+                const val = row[header];
+                if (val && val.trim() !== '') uniqueValues.add(val.trim());
+                if (uniqueValues.size >= 150) break; // Limite de segurança
+            }
+            options = Array.from(uniqueValues).map(val => ({
+                label: val,
+                value: generateDbName(val)
+            }));
+        }
+
         const newId = crypto.randomUUID();
         newFieldsList.push({ id: newId, type: config.type || 'text', label: header, required: false, options });
         headerToFieldId[header] = newId;
@@ -151,74 +186,134 @@ export default function NewModule() {
 
     if (importMode === 'create') {
         addTable(csvData.filename, newFieldsList, processedRows);
-        toast.success("Tabela criada com dados.");
+        toast.success(`Tabela criada com ${processedRows.length} linhas.`);
     } else {
         setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, fields: newFieldsList, rows: [...t.rows, ...processedRows] } : t));
-        toast.success("Dados importados.");
+        toast.success(`${processedRows.length} linhas importadas.`);
     }
     setCsvModalOpen(false);
     setCsvData(null);
   };
 
+  // --- NOVA FUNÇÃO DE CORREÇÃO DE DATA ---
+  const formatDateForDb = (value: string) => {
+    if (!value) return null;
+    // Tenta detectar formato BR: DD/MM/YYYY
+    // Regex: pega 1 ou 2 digitos / 1 ou 2 digitos / 4 digitos
+    const brDateRegex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/;
+    const match = value.match(brDateRegex);
+
+    if (match) {
+        const day = match[1].padStart(2, '0');
+        const month = match[2].padStart(2, '0');
+        const year = match[3];
+        return `${year}-${month}-${day}`; // Retorna YYYY-MM-DD (ISO)
+    }
+    return value; // Se não bater o regex, retorna original (pode já ser ISO ou inválido)
+  };
+
+  // --- SAVE LOGIC ---
   const handleSave = async () => {
     if (!name.trim()) return toast.error("Dê um nome ao sistema");
     setLoading(true);
+    console.log("=== INICIANDO SALVAMENTO ===");
+    
     try {
+      // 1. MÓDULO
       const slug = generateDbName(name) + '-' + Math.floor(Math.random()*9000);
-      const { data: module, error } = await supabase.from('crud_modules').insert({ name, description, slug, created_by: user?.id, is_active: true }).select().single();
-      if (error) throw error;
-      
+      console.log("1. Criando módulo:", slug);
+
+      const { data: module, error: modError } = await supabase.from('crud_modules')
+        .insert({ name, description, slug, created_by: user?.id, is_active: true })
+        .select().single();
+
+      if (modError) throw new Error("Erro módulo: " + modError.message);
+      if (!module) throw new Error("Módulo não retornado.");
+
+      // 2. TABELAS
       for (const table of tables) {
-          const { data: dbTable, error: tError } = await supabase.from('crud_tables').insert({ 
-              crud_module_id: module.id, name: table.name, db_table_name: generateDbName(table.name)
-          }).select().single();
-          if (tError) throw tError;
+          console.log(`2. Criando tabela: ${table.name}`);
+          const { data: dbTable, error: tableError } = await supabase.from('crud_tables')
+            .insert({ crud_module_id: module.id, name: table.name, db_table_name: generateDbName(table.name) })
+            .select().single();
+          
+          if (tableError) throw new Error("Erro tabela: " + tableError.message);
 
           const fieldIdToDbName: Record<string, string> = {};
 
-          const fieldsToInsert = table.fields.map((f, i) => {
-            const dbName = generateDbName(f.label);
-            fieldIdToDbName[f.id] = dbName; 
-            return {
-                crud_table_id: dbTable.id, name: dbName, label: f.label, field_type: f.type, 
-                is_required: f.required, options: JSON.stringify(f.options), order_index: i
-            };
-          });
+          // 3. CAMPOS
+          console.log(`3. Criando campos...`);
+          if (table.fields.length > 0) {
+            const fieldsToInsert = table.fields.map((f, i) => {
+                const dbName = generateDbName(f.label) + `_${i}`; 
+                fieldIdToDbName[f.id] = dbName; 
+                return {
+                    crud_table_id: dbTable.id, name: dbName, label: f.label, field_type: f.type, 
+                    is_required: f.required, options: JSON.stringify(f.options), order_index: i
+                };
+            });
 
-          if (fieldsToInsert.length > 0) await supabase.from('crud_fields').insert(fieldsToInsert);
+            const { error: fError } = await supabase.from('crud_fields').insert(fieldsToInsert);
+            if (fError) throw new Error("Erro campos: " + fError.message);
+          }
 
+          // 4. DADOS (COM CORREÇÃO DE DATA)
           if (table.rows && table.rows.length > 0) {
-              // --- AQUI ESTÁ A CORREÇÃO: GERA BATCH_ID SE TIVER DADOS IMPORTADOS ---
+              console.log(`4. Preparando ${table.rows.length} registros...`);
               const batchId = crypto.randomUUID();
 
-              const recordsToInsert = table.rows.map(row => {
+              // Filtra linhas vazias
+              const validRows = table.rows.filter(r => r && typeof r === 'object');
+
+              const recordsToInsert = validRows.map(row => {
                   const recordData: any = {};
-                  
-                  // Injeta o ID do lote para agrupar na aprovação
                   recordData['_batch_id'] = batchId;
 
                   Object.keys(row).forEach(fieldId => {
+                      const fieldDef = table.fields.find(f => f.id === fieldId);
                       const dbName = fieldIdToDbName[fieldId];
-                      if (dbName) recordData[dbName] = row[fieldId];
+                      let value = row[fieldId];
+
+                      // --- AQUI A CORREÇÃO DE DATA ---
+                      if (fieldDef?.type === 'date' && value) {
+                          value = formatDateForDb(value);
+                      }
+                      // -------------------------------
+
+                      if (dbName && value !== undefined) {
+                          recordData[dbName] = value;
+                      }
                   });
                   return {
                       crud_table_id: dbTable.id, data: recordData, created_by: user?.id, status: 'pending'
                   };
               });
               
-              const BATCH_SIZE = 100;
+              // Insere em lotes de 50
+              const BATCH_SIZE = 50; 
               for (let i = 0; i < recordsToInsert.length; i += BATCH_SIZE) {
-                  await supabase.from('crud_records').insert(recordsToInsert.slice(i, i + BATCH_SIZE));
+                  console.log(`   Inserindo lote ${i}...`);
+                  const chunk = recordsToInsert.slice(i, i + BATCH_SIZE);
+                  const { error: rError } = await supabase.from('crud_records').insert(chunk);
+                  if (rError) console.error(`ERRO LOTE ${i}:`, rError);
               }
           }
       }
-      toast.success("Sistema criado!");
+      
+      toast.success("Sistema publicado com sucesso!");
       navigate('/modulos');
-    } catch (e: any) { console.error(e); toast.error(e.message); } finally { setLoading(false); }
+
+    } catch (e: any) { 
+        console.error("ERRO FATAL:", e);
+        toast.error(e.message || "Erro crítico ao salvar.");
+    } finally { 
+        setLoading(false); 
+    }
   };
 
   return (
     <div className="max-w-5xl mx-auto pb-32 animate-in fade-in duration-500 relative">
+       {/* MODAL CSV */}
        {csvModalOpen && csvData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
             <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
@@ -251,7 +346,31 @@ export default function NewModule() {
                             <div key={idx} className="grid grid-cols-[1fr_2fr_2fr] gap-4 px-6 py-4 items-start bg-white hover:bg-slate-50 transition-colors">
                                 <div><div className="text-sm font-bold text-slate-700 truncate" title={header}>{header}</div><div className="text-[10px] text-slate-400 mt-1 truncate">Ex: {csvData.rows[0]?.[header] || '(vazio)'}</div></div>
                                 <div className="flex items-center gap-2"><ArrowRight className="h-4 w-4 text-slate-300 flex-shrink-0" />{importMode === 'create' ? (<span className="text-sm font-medium text-green-600 bg-green-50 px-2 py-1 rounded border border-green-100">Será criado novo campo</span>) : (<select className="w-full text-sm border-slate-200 rounded-md py-1.5 focus:ring-blue-500 focus:border-blue-500" value={action} onChange={(e) => setColumnMapping(prev => ({ ...prev, [header]: e.target.value }))}><option value="new" className="text-green-600 font-bold">+ Criar Novo Campo</option><option value="ignore" className="text-slate-400">-- Ignorar Coluna --</option><optgroup label="Campos Existentes">{activeTable.fields.map(f => (<option key={f.id} value={f.id}>{f.label || '(Sem título)'}</option>))}</optgroup></select>)}</div>
-                                <div>{(importMode === 'create' || action === 'new') ? (<div className="space-y-2 animate-in fade-in"><div className="flex items-center gap-2"><Label className="text-[10px] uppercase text-slate-400 w-12">Tipo:</Label><select className="flex-1 text-sm border-slate-200 rounded-md py-1.5" value={config.type} onChange={(e) => setColumnConfigs(prev => ({ ...prev, [header]: { ...prev[header], type: e.target.value } }))}>{QUESTION_TYPES.map(t => (<option key={t.id} value={t.id}>{t.label}</option>))}</select></div></div>) : (action !== 'ignore' && <span className="text-xs text-slate-400 italic">Usando configuração atual do campo</span>)}</div>
+                                <div>
+                                    {(importMode === 'create' || action === 'new') ? (
+                                        <div className="space-y-2 animate-in fade-in">
+                                            <div className="flex items-center gap-2">
+                                                <Label className="text-[10px] uppercase text-slate-400 w-12">Tipo:</Label>
+                                                <select className="flex-1 text-sm border-slate-200 rounded-md py-1.5" value={config.type} onChange={(e) => setColumnConfigs(prev => ({ ...prev, [header]: { ...prev[header], type: e.target.value } }))}>
+                                                    {QUESTION_TYPES.map(t => (<option key={t.id} value={t.id}>{t.label}</option>))}
+                                                </select>
+                                            </div>
+                                            {/* CHECKBOX PARA EXTRAIR OPÇÕES */}
+                                            {config.type === 'select' && (
+                                                <div className="flex items-center gap-2 ml-[56px] mt-1">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        id={`extract-${idx}`}
+                                                        className="rounded border-slate-300 text-[#003B8F] focus:ring-[#003B8F]"
+                                                        checked={config.extractOptions}
+                                                        onChange={(e) => setColumnConfigs(prev => ({ ...prev, [header]: { ...prev[header], extractOptions: e.target.checked } }))}
+                                                    />
+                                                    <label htmlFor={`extract-${idx}`} className="text-xs text-slate-600 cursor-pointer select-none">Extrair opções únicas</label>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (action !== 'ignore' && <span className="text-xs text-slate-400 italic">Usando configuração atual do campo</span>)}
+                                </div>
                             </div>
                         );
                     })}
@@ -265,6 +384,7 @@ export default function NewModule() {
         </div>
       )}
 
+      {/* HEADER E NAVIGATION */}
       <div className="sticky top-0 z-30 bg-slate-50/95 backdrop-blur border-b py-4 mb-8">
         <div className="flex items-center justify-between">
           <Button variant="ghost" onClick={() => navigate('/modulos')} className="text-slate-500 hover:text-[#003B8F]">
@@ -283,6 +403,7 @@ export default function NewModule() {
         </div>
       </div>
       
+      {/* CONTEÚDO PRINCIPAL */}
       <div className="space-y-8">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-[#003B8F]">{step === 1 ? 'Vamos começar!' : 'Estrutura de Dados'}</h1>
@@ -381,6 +502,8 @@ export default function NewModule() {
                                 </div>
                                 <Button variant="ghost" size="icon" onClick={() => removeField(field.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50"><Trash2 className="h-5 w-5" /></Button>
                               </div>
+                              
+                              {/* --- OPÇÕES SELECT --- */}
                               {field.type === 'select' && (
                                 <div className="bg-slate-50 p-4 rounded-lg space-y-3">
                                   <p className="text-xs font-bold text-slate-500 uppercase">Opções ({field.options?.length || 0})</p>
@@ -392,11 +515,22 @@ export default function NewModule() {
                                     ))}
                                   </div>
                                   <div className="flex gap-2">
-                                    <Input id={`opt-${field.id}`} placeholder="Nova opção..." className="bg-white h-9" onKeyDown={e => { if(e.key === 'Enter') { const val = (e.currentTarget as HTMLInputElement).value.trim(); if(val) { const slug = val.toLowerCase().replace(/[^a-z0-9]/g, '_'); updateField(field.id, 'options', [...(field.options||[]), { label: val, value: slug }]); (e.currentTarget as HTMLInputElement).value = ''; } e.preventDefault(); } }}/>
-                                    <Button size="sm" variant="secondary" onClick={() => { const input = document.getElementById(`opt-${field.id}`) as HTMLInputElement; if(input && input.value.trim()) { const val = input.value.trim(); const slug = val.toLowerCase().replace(/[^a-z0-9]/g, '_'); updateField(field.id, 'options', [...(field.options||[]), { label: val, value: slug }]); input.value = ''; } }}>Adicionar</Button>
+                                    <Input 
+                                        id={`opt-${field.id}`} 
+                                        placeholder="Nova opção..." 
+                                        className="bg-white h-9" 
+                                        onKeyDown={e => { 
+                                            if(e.key === 'Enter') { 
+                                                e.preventDefault(); 
+                                                handleAddOption(field.id);
+                                            } 
+                                        }}
+                                    />
+                                    <Button size="sm" variant="secondary" onClick={() => handleAddOption(field.id)}>Adicionar</Button>
                                   </div>
                                 </div>
                               )}
+                              
                               <div className="flex items-center gap-2 pt-2"><Switch checked={field.required} onCheckedChange={c => updateField(field.id, 'required', c)} /><span className="text-sm text-slate-600">Preenchimento Obrigatório?</span></div>
                             </div>
                           </div>

@@ -25,7 +25,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [role, setRole] = useState<UserRole>('consulta');
   const [loading, setLoading] = useState(true);
 
-  // Busca o perfil no banco (Função Auxiliar)
+  // Busca perfil em background (não bloqueia a UI)
   const fetchProfile = async (userId: string) => {
     try {
       const { data } = await supabase.from('profiles').select('*').eq('user_id', userId).maybeSingle();
@@ -34,74 +34,65 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setRole((data.role as UserRole) || 'consulta');
       }
     } catch (e) {
-      console.error("Erro ao carregar perfil:", e);
+      console.error("Erro perfil:", e);
     }
   };
 
   useEffect(() => {
     let mounted = true;
 
-    // 1. INICIALIZAÇÃO ROBUSTA
     const initAuth = async () => {
       try {
-        // Tenta recuperar a sessão do LocalStorage
-        const { data: { session } } = await supabase.auth.getSession();
+        // TÉCNICA DE CORRIDA:
+        // O Supabase tem 2 segundos para responder. Se não responder, forçamos a liberação.
+        // Isso impede que a tela fique branca/travada para sempre.
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject("Timeout"), 2000));
+
+        const result: any = await Promise.race([sessionPromise, timeoutPromise]);
         
-        if (mounted) {
-          if (session?.user) {
-            console.log("Sessão restaurada:", session.user.email);
-            // Define o usuário IMEDIATAMENTE para evitar redirect
-            setSession(session);
-            setUser(session.user);
-            
-            // Busca o perfil em segundo plano
-            await fetchProfile(session.user.id);
-          }
+        if (mounted && result?.data?.session) {
+          const s = result.data.session;
+          setSession(s);
+          setUser(s.user);
+          // Libera a tela IMEDIATAMENTE, perfil carrega depois
+          setLoading(false);
+          await fetchProfile(s.user.id);
+        } else if (mounted) {
+          // Se não tiver sessão ou der timeout
+          setLoading(false);
         }
+
       } catch (error) {
-        console.error("Erro na inicialização do Auth:", error);
-      } finally {
+        // Se der erro ou timeout, libera a tela para o usuário não ficar preso
+        console.warn("Auth check demorou ou falhou, liberando UI...", error);
         if (mounted) setLoading(false);
       }
     };
 
     initAuth();
 
-    // 2. LISTENER DE MUDANÇAS (Login, Logout, Refresh Token)
+    // Listener para manter sincronia
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log("Evento Auth:", event);
-      
-      if (mounted) {
+      if (!mounted) return;
+
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         setSession(session);
         setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          // Se o perfil ainda não estiver carregado, carrega agora
-          if (!profile) await fetchProfile(session.user.id);
-        } else if (event === 'SIGNED_OUT') {
-          // Limpeza total ao deslogar
-          setProfile(null);
-          setRole('consulta');
-          setUser(null);
-        }
-        
+        setLoading(false);
+        if (session?.user && !profile) await fetchProfile(session.user.id);
+      } 
+      else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setSession(null);
+        setProfile(null);
+        setRole('consulta');
         setLoading(false);
       }
     });
 
-    // 3. TIMEOUT DE SEGURANÇA (Aumentado para 6s)
-    // Se o banco estiver "dormindo", isso evita o loading infinito, 
-    // mas dá tempo suficiente para recuperar a sessão.
-    const safetyTimer = setTimeout(() => {
-      if (loading && mounted) {
-        console.warn("Auth timeout: Liberando aplicação.");
-        setLoading(false);
-      }
-    }, 6000);
-
     return () => {
       mounted = false;
-      clearTimeout(safetyTimer);
       subscription.unsubscribe();
     };
   }, []);
@@ -118,9 +109,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const signIn = async (e: string, p: string) => supabase.auth.signInWithPassword({ email: e, password: p });
   
   const signOut = async () => {
-    setLoading(true);
-    await supabase.auth.signOut();
-    // O onAuthStateChange vai lidar com a limpeza de estado
+    try {
+      setLoading(true);
+      await supabase.auth.signOut();
+    } finally {
+      setUser(null); setSession(null); setProfile(null); setRole('consulta');
+      setLoading(false);
+    }
   };
 
   return (

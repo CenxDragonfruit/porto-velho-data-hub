@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { LayoutDashboard, FolderOpen, ClipboardList, PlusCircle, ChevronLeft, ChevronRight, LogOut, UserCircle, Users } from 'lucide-react';
+import { LayoutDashboard, FolderOpen, ClipboardList, PlusCircle, ChevronLeft, ChevronRight, LogOut, UserCircle, Users, History } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -11,7 +11,6 @@ export function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   
-  // 1. IMPORTANTE: Pegar o 'role' do hook de autenticação
   const { profile, signOut, role } = useAuth();
   
   const isActive = (path: string) => location.pathname === path;
@@ -27,12 +26,21 @@ export function Sidebar() {
     { path: '/aprovacoes', icon: ClipboardList, label: 'Central de Tarefas' },
   ];
 
-  // 2. LÓGICA DE PERMISSÃO: Adiciona o link de Equipe apenas para Admin/Supervisor
+  // Menu Condicional
   if (role === 'administrador' || role === 'supervisor') {
       navItems.push({ 
           path: '/equipe', 
           icon: Users, 
           label: 'Gestão de Equipe' 
+      });
+  }
+
+  // Link de Auditoria (Apenas Admin)
+  if (role === 'administrador') {
+      navItems.push({
+          path: '/auditoria',
+          icon: History,
+          label: 'Auditoria (Logs)'
       });
   }
 
@@ -46,15 +54,15 @@ export function Sidebar() {
         {/* Header Branding */}
         <div className={cn("flex items-center h-24 transition-all overflow-hidden mb-2", collapsed ? "justify-center px-0" : "px-6")}>
           <div className="flex items-center gap-3">
-             <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center p-1 shadow-lg shrink-0">
-               <img src="https://www.portovelho.ro.gov.br/logo/Brasao_municipal.svg" alt="Brasão" className="w-full h-full object-contain"/>
-             </div>
-             {!collapsed && (
-               <div className="flex flex-col min-w-[140px] animate-in fade-in duration-300 whitespace-nowrap">
-                 <h1 className="font-bold text-lg leading-none text-white tracking-tight">SMTI</h1>
-                 <p className="text-[10px] text-yellow-400 font-bold uppercase tracking-widest mt-1">Prefeitura PVH</p>
-               </div>
-             )}
+              <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center p-1 shadow-lg shrink-0">
+                <img src="https://www.portovelho.ro.gov.br/logo/Brasao_municipal.svg" alt="Brasão" className="w-full h-full object-contain"/>
+              </div>
+              {!collapsed && (
+                <div className="flex flex-col min-w-[140px] animate-in fade-in duration-300 whitespace-nowrap">
+                  <h1 className="font-bold text-lg leading-none text-white tracking-tight">SMTI</h1>
+                  <p className="text-[10px] text-yellow-400 font-bold uppercase tracking-widest mt-1">Prefeitura PVH</p>
+                </div>
+              )}
           </div>
         </div>
 
@@ -70,13 +78,11 @@ export function Sidebar() {
                     className={cn(
                       "flex items-center rounded-xl transition-all duration-200 group border min-h-[50px] relative overflow-hidden", 
                       collapsed ? "justify-center w-full px-0" : "px-3 gap-3 w-full",
-                      // Cores Ativas (Amarelo/Branco) vs Inativas
                       active 
                         ? "bg-white/10 text-yellow-400 border-white/5 shadow-inner" 
                         : "border-transparent text-white/70 hover:bg-white/5 hover:text-white"
                     )}
                   >
-                    {/* Barra lateral amarela para item ativo */}
                     {active && !collapsed && (
                         <div className="absolute left-0 top-0 bottom-0 w-1 bg-yellow-400 rounded-l-md" />
                     )}
@@ -100,7 +106,7 @@ export function Sidebar() {
           
           <div className="my-4 border-t border-white/10 mx-2" />
 
-          {/* 3. LÓGICA DE PERMISSÃO: Botão de Ação Rápida só para ADMIN */}
+          {/* Botão de Ação Rápida (Admin) */}
           {role === 'administrador' && (
             <div className={cn("px-0", !collapsed && "px-0")}>
                {!collapsed && <p className="text-[10px] uppercase text-white/40 font-bold mb-3 px-2 whitespace-nowrap tracking-wider">Ações</p>}
@@ -121,28 +127,27 @@ export function Sidebar() {
           )}
         </nav>
 
-        {/* Footer do Usuário (Card Azul Escuro) */}
+        {/* Footer do Usuário */}
         <div className="mt-auto p-0 bg-[#001835] border-t border-white/5">
-           <div className={cn(
-               "flex items-center transition-all p-4", 
-               collapsed ? "justify-center" : "gap-3"
-            )}>
-             <div onClick={() => navigate('/perfil')} className="w-10 h-10 rounded-full bg-yellow-400 text-[#003B8F] font-bold flex items-center justify-center cursor-pointer hover:ring-2 hover:ring-white transition-all shrink-0 shadow-md relative">
-               {profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : <UserCircle className="h-6 w-6"/>}
-               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-[#001835] rounded-full"></span>
-             </div>
-             
-             {!collapsed && (
-               <div className="flex-1 min-w-0 flex flex-col justify-center">
-                 <p className="text-xs font-bold text-white truncate cursor-pointer hover:text-yellow-400 transition-colors" onClick={() => navigate('/perfil')}>
-                   {profile?.full_name?.split(' ')[0] || 'Servidor'}
-                 </p>
-                 <button onClick={handleSignOut} className="text-[10px] text-white/50 hover:text-red-400 flex items-center gap-1 mt-0.5 transition-colors w-fit font-medium hover:underline">
-                   <LogOut className="h-3 w-3"/> Sair
-                 </button>
-               </div>
-             )}
-           </div>
+            <div className={cn("flex items-center transition-all p-4", collapsed ? "justify-center" : "gap-3")}>
+              
+              <div onClick={() => navigate('/perfil')} className="w-10 h-10 rounded-full bg-yellow-400 text-[#003B8F] font-bold flex items-center justify-center cursor-pointer hover:ring-2 hover:ring-white transition-all shrink-0 shadow-md relative">
+                {profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : <UserCircle className="h-6 w-6"/>}
+                {profile && <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-[#001835] rounded-full animate-pulse"></span>}
+              </div>
+              
+              {!collapsed && (
+                <div className="flex-1 min-w-0 flex flex-col justify-center">
+                  <p className="text-xs font-bold text-white truncate cursor-pointer hover:text-yellow-400 transition-colors" onClick={() => navigate('/perfil')}>
+                    {profile?.full_name ? profile.full_name.split(' ')[0] : <span className="opacity-50 italic">Carregando...</span>}
+                  </p>
+                  
+                  <button onClick={handleSignOut} className="text-[10px] text-white/50 hover:text-red-400 flex items-center gap-1 mt-0.5 transition-colors w-fit font-medium hover:underline">
+                    <LogOut className="h-3 w-3"/> Sair
+                  </button>
+                </div>
+              )}
+            </div>
         </div>
 
         {/* Botão de Toggle */}

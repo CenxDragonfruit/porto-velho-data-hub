@@ -1,15 +1,13 @@
-// ... imports (iguais ao anterior)
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Check, X, Clock, FileSpreadsheet, ChevronDown, ChevronUp, Loader2, PackageCheck, FileText } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, PackageCheck, FileText, FileSpreadsheet } from 'lucide-react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 type BatchGroup = {
@@ -20,8 +18,17 @@ type BatchGroup = {
   date: string;
 };
 
+// Função auxiliar para dividir array em pedaços (chunks)
+const chunkArray = <T,>(array: T[], size: number): T[][] => {
+  const result = [];
+  for (let i = 0; i < array.length; i += size) {
+    result.push(array.slice(i, i + size));
+  }
+  return result;
+};
+
 export default function Approvals() {
-  const { user, checkPermission } = useAuth(); // Import checkPermission
+  const { user, checkPermission } = useAuth();
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [singles, setSingles] = useState<any[]>([]);
@@ -70,34 +77,95 @@ export default function Approvals() {
     setBatches(batchList);
   };
 
+  // --- CORREÇÃO PRINCIPAL: Processamento em Chunks ---
   const handleApprove = async (ids: string[]) => {
     if (ids.length === 0) return;
     setProcessing(true);
+    
+    // Divide os IDs em lotes de 50 para evitar timeout ou payload excessivo
+    const chunks = chunkArray(ids, 50);
+    let successCount = 0;
+    let errorCount = 0;
+
+    const toastId = toast.loading(`Iniciando aprovação de ${ids.length} registros...`);
+
     try {
-      const { error } = await supabase.rpc('approve_records', { p_record_ids: ids, p_user_id: user?.id });
-      if (error && error.message.includes('function not found')) {
-         const { error: normalError } = await supabase.from('crud_records').update({ status: 'approved', approved_by: user?.id, updated_at: new Date().toISOString() }).in('id', ids);
-         if (normalError) throw normalError;
-      } else if (error) throw error;
-      toast.success(`${ids.length} registro(s) aprovado(s)!`);
+      for (const [index, chunk] of chunks.entries()) {
+        // Atualiza o toast para dar feedback visual
+        toast.loading(`Processando lote ${index + 1} de ${chunks.length}...`, { id: toastId });
+
+        const { error } = await supabase
+            .from('crud_records')
+            .update({ 
+                status: 'approved', 
+                approved_by: user?.id, 
+                updated_at: new Date().toISOString() 
+            })
+            .in('id', chunk); // Atualiza apenas os 50 deste lote
+
+        if (error) {
+            console.error("Erro no lote:", error);
+            errorCount += chunk.length;
+        } else {
+            successCount += chunk.length;
+        }
+      }
+
+      if (errorCount > 0) {
+        toast.warning(`${successCount} aprovados, mas ${errorCount} falharam. Verifique os logs ou triggers do banco.`, { id: toastId });
+      } else {
+        toast.success(`${successCount} registros aprovados com sucesso!`, { id: toastId });
+      }
+
       fetchPending(); 
-    } catch (e: any) { toast.error("Erro ao aprovar: " + e.message); } finally { setProcessing(false); }
+    } catch (e: any) { 
+        toast.error("Erro crítico ao aprovar: " + e.message, { id: toastId }); 
+    } finally { 
+        setProcessing(false); 
+    }
   };
 
   const handleRejectConfirm = async () => {
     if (!rejectReason.trim() || !rejectData) return;
     setProcessing(true);
+    const toastId = toast.loading("Rejeitando registros...");
+
     try {
-      const { error } = await supabase.rpc('reject_records', { p_record_ids: rejectData.ids, p_user_id: user?.id, p_reason: rejectReason });
-      if (error && error.message.includes('function not found')) {
-         const { error: normalError } = await supabase.from('crud_records').update({ status: 'rejected', rejection_reason: rejectReason, approved_by: user?.id, updated_at: new Date().toISOString() }).in('id', rejectData.ids);
-         if (normalError) throw normalError;
-      } else if (error) throw error;
-      toast.success("Solicitação rejeitada.");
-      setRejectData(null);
-      setRejectReason('');
-      fetchPending();
-    } catch (e: any) { toast.error("Erro ao rejeitar."); } finally { setProcessing(false); }
+        // Também aplicamos chunking na rejeição por segurança
+        const chunks = chunkArray(rejectData.ids, 50);
+        let errorOccurred = false;
+
+        for (const chunk of chunks) {
+            const { error } = await supabase
+                .from('crud_records')
+                .update({ 
+                    status: 'rejected', 
+                    rejection_reason: rejectReason, 
+                    approved_by: user?.id, 
+                    updated_at: new Date().toISOString() 
+                })
+                .in('id', chunk);
+            
+            if (error) {
+                errorOccurred = true;
+                console.error(error);
+            }
+        }
+
+        if (errorOccurred) {
+             toast.error("Alguns registros não puderam ser rejeitados.", { id: toastId });
+        } else {
+             toast.success("Solicitação rejeitada.", { id: toastId });
+        }
+
+        setRejectData(null);
+        setRejectReason('');
+        fetchPending();
+    } catch (e: any) { 
+        toast.error("Erro ao rejeitar: " + e.message, { id: toastId }); 
+    } finally { 
+        setProcessing(false); 
+    }
   };
 
   if (loading) return <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-[#003B8F] h-8 w-8" /></div>;
@@ -112,7 +180,6 @@ export default function Approvals() {
 
   return (
     <div className="space-y-10 pb-20 animate-in fade-in pt-6">
-      {/* Aviso se não puder aprovar */}
       {!canApprove && (
           <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg text-yellow-800 text-sm mb-4 flex items-center gap-2">
               <FileText className="h-4 w-4" /> Modo de visualização. Você não tem permissão para aprovar registros.
@@ -132,7 +199,7 @@ export default function Approvals() {
                 batch={batch} 
                 onApprove={() => handleApprove(batch.records.map(r => r.id))} 
                 onReject={() => setRejectData({ ids: batch.records.map(r => r.id), type: 'batch' })} 
-                disabled={processing || !canApprove} // TRAVADO SE NÃO TIVER PERMISSÃO
+                disabled={processing || !canApprove} 
               />
             ))}
           </div>
@@ -154,7 +221,7 @@ export default function Approvals() {
                 record={record} 
                 onApprove={() => handleApprove([record.id])} 
                 onReject={() => setRejectData({ ids: [record.id], type: 'single' })} 
-                disabled={processing || !canApprove} // TRAVADO SE NÃO TIVER PERMISSÃO
+                disabled={processing || !canApprove} 
               />
             ))}
           </div>
@@ -175,6 +242,8 @@ export default function Approvals() {
   );
 }
 
+// Os componentes BatchCard e SingleCard permanecem iguais,
+// apenas certifique-se de que estão no arquivo.
 function BatchCard({ batch, onApprove, onReject, disabled }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const count = batch.records.length;
@@ -239,7 +308,7 @@ function SingleCard({ record, onApprove, onReject, disabled }: any) {
       <CardHeader className="p-4 pb-2">
          <div className="flex justify-between items-start mb-2">
             <Badge variant="outline" className="text-[10px] font-normal text-slate-500 bg-slate-50">{record.crud_tables?.name}</Badge>
-            <span className="text-[10px] text-slate-300 font-mono">{new Date(record.created_at).toLocaleDateString()}</span>
+            <span className="text-xs text-slate-300 font-mono">{new Date(record.created_at).toLocaleDateString()}</span>
          </div>
          <CardTitle className="text-sm font-bold text-slate-800 leading-snug line-clamp-2" title={title}>{title}</CardTitle>
       </CardHeader>

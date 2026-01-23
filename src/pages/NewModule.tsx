@@ -8,23 +8,28 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
   Plus, Trash2, CheckSquare, ArrowLeft, Type, Calendar, Hash, Mail, 
   Phone, DollarSign, List, FileText, X, GripVertical,
   Table as TableIcon, Upload, ArrowRight, FileSpreadsheet, Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
+import Papa from 'papaparse';
+
+// --- CONFIGURAÇÃO E TIPOS ---
 
 const QUESTION_TYPES = [
-  { id: 'text', label: 'Texto Curto', icon: Type, color: 'bg-blue-100 text-blue-600', badge: 'bg-blue-600 text-white', desc: 'Nome, Cidade, Cargo' },
-  { id: 'textarea', label: 'Texto Longo', icon: FileText, color: 'bg-indigo-100 text-indigo-600', badge: 'bg-indigo-600 text-white', desc: 'Observações, Detalhes' },
-  { id: 'number', label: 'Número', icon: Hash, color: 'bg-emerald-100 text-emerald-600', badge: 'bg-emerald-600 text-white', desc: 'Idade, Quantidade' },
-  { id: 'date', label: 'Data', icon: Calendar, color: 'bg-orange-100 text-orange-600', badge: 'bg-orange-600 text-white', desc: 'Data de Nasc., Agendamento' },
-  { id: 'email', label: 'E-mail', icon: Mail, color: 'bg-purple-100 text-purple-600', badge: 'bg-purple-600 text-white', desc: 'Contato digital' },
-  { id: 'phone', label: 'Telefone', icon: Phone, color: 'bg-green-100 text-green-600', badge: 'bg-green-600 text-white', desc: 'Celular, WhatsApp' },
-  { id: 'cpf', label: 'CPF', icon: CheckSquare, color: 'bg-slate-100 text-slate-600', badge: 'bg-slate-600 text-white', desc: 'Documento Pessoal' },
-  { id: 'currency', label: 'Valor (R$)', icon: DollarSign, color: 'bg-yellow-100 text-yellow-700', badge: 'bg-yellow-600 text-white', desc: 'Orçamentos, Preços' },
-  { id: 'select', label: 'Lista de Opções', icon: List, color: 'bg-rose-100 text-rose-600', badge: 'bg-rose-600 text-white', desc: 'Seleção única (Ex: Sim/Não)' },
+  { id: 'text', label: 'Texto Curto', icon: Type, color: 'bg-blue-100 text-blue-600', desc: 'Nome, Cidade, Cargo' },
+  { id: 'textarea', label: 'Texto Longo', icon: FileText, color: 'bg-indigo-100 text-indigo-600', desc: 'Observações' },
+  { id: 'number', label: 'Número', icon: Hash, color: 'bg-emerald-100 text-emerald-600', desc: 'Idade, Quantidade' },
+  { id: 'date', label: 'Data', icon: Calendar, color: 'bg-orange-100 text-orange-600', desc: 'Datas' },
+  { id: 'email', label: 'E-mail', icon: Mail, color: 'bg-purple-100 text-purple-600', desc: 'Contato' },
+  { id: 'phone', label: 'Telefone', icon: Phone, color: 'bg-green-100 text-green-600', desc: 'Celular' },
+  { id: 'cpf', label: 'CPF', icon: CheckSquare, color: 'bg-slate-100 text-slate-600', desc: 'Documento' },
+  { id: 'currency', label: 'Valor (R$)', icon: DollarSign, color: 'bg-yellow-100 text-yellow-700', desc: 'Preços' },
+  { id: 'select', label: 'Lista de Opções', icon: List, color: 'bg-rose-100 text-rose-600', desc: 'Seleção única' },
 ];
 
 export default function NewModule() {
@@ -32,38 +37,37 @@ export default function NewModule() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   
+  // Estrutura das tabelas
   const [tables, setTables] = useState([
     { id: crypto.randomUUID(), name: 'Tabela Principal', fields: [] as any[], rows: [] as any[] }
   ]);
   const [activeTableId, setActiveTableId] = useState(tables[0].id);
 
-  // States do CSV
+  // --- STATES DO CSV ---
   const [csvModalOpen, setCsvModalOpen] = useState(false);
-  const [csvData, setCsvData] = useState<{ headers: string[], rows: any[], filename: string } | null>(null);
-  const [importMode, setImportMode] = useState<'create' | 'update'>('create');
-  const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
-  const [columnConfigs, setColumnConfigs] = useState<Record<string, { type: string, extractOptions: boolean }>>({});
+  const [csvPreview, setCsvPreview] = useState<{ headers: string[], rows: any[], fileName: string } | null>(null);
+  const [columnConfig, setColumnConfig] = useState<Record<string, string>>({}); // Header -> TypeID
 
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { user } = useAuth();
+  
+  const { profile } = useAuth();
   const navigate = useNavigate();
 
   const activeTable = tables.find(t => t.id === activeTableId) || tables[0];
 
-  // GERA NOME SEGURO PARA O BANCO
   const generateDbName = (label: string) => {
     const clean = label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '_');
     return clean || `campo_${Math.floor(Math.random() * 10000)}`;
   };
 
-  // HELPERS DE TABELA
-  const addTable = (tableName = `Nova Tabela ${tables.length + 1}`, initialFields: any[] = [], initialRows: any[] = []) => {
+  // --- LÓGICA DE MANIPULAÇÃO DE TABELAS ---
+  const addTable = (tableName = `Nova Tabela ${tables.length + 1}`) => {
     const newId = crypto.randomUUID();
-    setTables([...tables, { id: newId, name: tableName, fields: initialFields, rows: initialRows }]);
+    setTables([...tables, { id: newId, name: tableName, fields: [], rows: [] }]);
     setActiveTableId(newId);
-    return newId;
   };
+
   const removeTable = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (tables.length === 1) return toast.error("Mínimo uma tabela.");
@@ -71,15 +75,34 @@ export default function NewModule() {
     setTables(newTables);
     if (activeTableId === id) setActiveTableId(newTables[0].id);
   };
-  const renameActiveTable = (newName: string) => { setTables(tables.map(t => t.id === activeTableId ? { ...t, name: newName } : t)); };
-  const addField = (typeId: string, label = '') => {
-    const newField = { id: crypto.randomUUID(), type: typeId, label: label, required: false, options: [] };
-    setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, fields: [...t.fields, newField] } : t));
-    return newField.id;
+
+  const renameActiveTable = (newName: string) => { 
+    setTables(tables.map(t => t.id === activeTableId ? { ...t, name: newName } : t)); 
   };
-  const updateField = (id: string, key: string, value: any) => { setTables(tables.map(t => t.id === activeTableId ? { ...t, fields: t.fields.map(f => f.id === id ? { ...f, [key]: value } : f) } : t)); };
-  const removeField = (id: string) => { setTables(tables.map(t => t.id === activeTableId ? { ...t, fields: t.fields.filter(f => f.id !== id) } : t)); };
-  const handleReorder = (newOrder: any[]) => { setTables(tables.map(t => t.id === activeTableId ? { ...t, fields: newOrder } : t)); };
+  
+  const addField = (typeId: string, label = '', options: any[] = []) => {
+    const newField = { 
+      id: crypto.randomUUID(), 
+      type: typeId, 
+      label: label, 
+      required: false, 
+      options: options 
+    };
+    setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, fields: [...t.fields, newField] } : t));
+    return newField;
+  };
+
+  const updateField = (id: string, key: string, value: any) => { 
+    setTables(tables.map(t => t.id === activeTableId ? { ...t, fields: t.fields.map(f => f.id === id ? { ...f, [key]: value } : f) } : t)); 
+  };
+
+  const removeField = (id: string) => { 
+    setTables(tables.map(t => t.id === activeTableId ? { ...t, fields: t.fields.filter(f => f.id !== id) } : t)); 
+  };
+  
+  const handleReorder = (newOrder: any[]) => { 
+    setTables(tables.map(t => t.id === activeTableId ? { ...t, fields: newOrder } : t)); 
+  };
 
   const handleAddOption = (fieldId: string) => {
     const input = document.getElementById(`opt-${fieldId}`) as HTMLInputElement;
@@ -87,216 +110,181 @@ export default function NewModule() {
       const val = input.value.trim();
       const slug = generateDbName(val);
       const currentField = activeTable.fields.find(f => f.id === fieldId);
-      const currentOptions = currentField?.options || [];
-      if (currentOptions.some((opt: any) => opt.value === slug)) {
-        toast.error("Esta opção já existe!");
-        return;
-      }
-      updateField(fieldId, 'options', [...currentOptions, { label: val, value: slug }]);
+      updateField(fieldId, 'options', [...(currentField?.options || []), { label: val, value: slug }]);
       input.value = '';
     }
   };
 
-  // --- LÓGICA DO CSV ---
+  // --- LÓGICA DE IMPORTAÇÃO CSV ---
+  
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      const lines = text.split('\n').filter(line => line.trim() !== '');
-      
-      if (lines.length > 0) {
-        const headers = lines[0].split(',').map(h => h.trim().replace(/['"]+/g, ''));
-        const rows = lines.slice(1).map(line => {
-            const values = line.split(',');
-            const row: Record<string, string> = {};
-            headers.forEach((h, i) => {
-                row[h] = values[i] ? values[i].trim().replace(/['"]+/g, '') : '';
-            });
-            return row;
-        });
-
-        setCsvData({ headers, rows, filename: file.name.replace('.csv', '') });
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      preview: 50, // Preview inicial
+      complete: (results) => {
+        const headers = results.meta.fields || [];
+        const rows = results.data as any[];
         
-        // Auto-match
-        const initialMap: Record<string, string> = {};
-        const initialConfigs: Record<string, { type: string, extractOptions: boolean }> = {};
-        headers.forEach(h => {
-          const existing = activeTable.fields.find(f => f.label.toLowerCase() === h.toLowerCase());
-          initialMap[h] = existing ? existing.id : 'new';
-          initialConfigs[h] = { type: 'text', extractOptions: false };
+        // Auto-detectar tipos
+        const initialConfig: Record<string, string> = {};
+        headers.forEach(header => {
+          const sampleValues = rows.slice(0, 10).map(r => r[header]);
+          initialConfig[header] = detectType(header, sampleValues);
         });
-        setColumnMapping(initialMap);
-        setColumnConfigs(initialConfigs);
+
+        setCsvPreview({ headers, rows, fileName: file.name });
+        setColumnConfig(initialConfig);
         setCsvModalOpen(true);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      },
+      error: (err) => {
+        toast.error("Erro ao ler CSV: " + err.message);
       }
-    };
-    reader.readAsText(file);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    });
   };
 
-  const processCsvImport = () => {
-    if (!csvData) return;
+  const detectType = (header: string, values: any[]) => {
+    const headerLower = header.toLowerCase();
+    if (headerLower.includes('data') || headerLower.includes('nasc')) return 'date';
+    if (headerLower.includes('valor') || headerLower.includes('preco')) return 'currency';
+    if (headerLower.includes('email')) return 'email';
+    if (headerLower.includes('cpf')) return 'cpf';
+    
+    // Verificar se é lista (poucos valores únicos)
+    const unique = new Set(values.filter(v => v)).size;
+    if (unique > 0 && unique < 5 && values.length > 5) return 'select';
+    
+    // Verificar se é numérico
+    const isNumeric = values.every(v => !isNaN(parseFloat(v)) && isFinite(v));
+    if (isNumeric && values.length > 0) return 'number';
 
-    const newFieldsList = importMode === 'update' ? [...activeTable.fields] : [];
-    const headerToFieldId: Record<string, string> = {};
-    let addedCount = 0;
+    return 'text'; 
+  };
 
-    csvData.headers.forEach(header => {
-      const action = importMode === 'create' ? 'new' : columnMapping[header];
-      if (action === 'ignore') return;
+  const confirmImport = () => {
+    if (!csvPreview) return;
 
-      if (action === 'new') {
-        const config = columnConfigs[header];
-        let options: any[] = [];
+    const newFields: any[] = [];
+    
+    csvPreview.headers.forEach(header => {
+      const type = columnConfig[header] || 'text';
+      let options: any[] = [];
 
-        // Extrai opções únicas se o usuário marcou o checkbox
-        if (config.type === 'select' && config.extractOptions) {
-            const uniqueValues = new Set<string>();
-            for (const row of csvData.rows) {
-                const val = row[header];
-                if (val && val.trim() !== '') uniqueValues.add(val.trim());
-                if (uniqueValues.size >= 150) break; // Limite de segurança
-            }
-            options = Array.from(uniqueValues).map(val => ({
-                label: val,
-                value: generateDbName(val)
-            }));
-        }
-
-        const newId = crypto.randomUUID();
-        newFieldsList.push({ id: newId, type: config.type || 'text', label: header, required: false, options });
-        headerToFieldId[header] = newId;
-        addedCount++;
-      } else {
-        headerToFieldId[header] = action; 
+      if (type === 'select') {
+        const uniqueValues = Array.from(new Set(csvPreview.rows.map(r => r[header]).filter(Boolean)));
+        options = uniqueValues.map((v: any) => ({ 
+          label: v, 
+          value: generateDbName(v) 
+        }));
       }
+
+      const field = {
+        id: crypto.randomUUID(),
+        type,
+        label: header,
+        required: false,
+        options
+      };
+      
+      newFields.push(field);
     });
 
-    const processedRows = csvData.rows.map(row => {
-        const rowData: any = {};
-        Object.keys(row).forEach(header => {
-            const fieldId = headerToFieldId[header];
-            if (fieldId) rowData[fieldId] = row[header];
-        });
-        return rowData;
+    const mappedRows = csvPreview.rows.map(row => {
+      const newRow: any = {};
+      Object.keys(row).forEach(header => {
+        newRow[header] = row[header]; 
+      });
+      return newRow;
     });
 
-    if (importMode === 'create') {
-        addTable(csvData.filename, newFieldsList, processedRows);
-        toast.success(`Tabela criada com ${processedRows.length} linhas.`);
-    } else {
-        setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, fields: newFieldsList, rows: [...t.rows, ...processedRows] } : t));
-        toast.success(`${processedRows.length} linhas importadas.`);
-    }
+    setTables(prev => prev.map(t => t.id === activeTableId ? {
+      ...t,
+      fields: [...t.fields, ...newFields],
+      rows: [...t.rows, ...mappedRows]
+    } : t));
+
     setCsvModalOpen(false);
-    setCsvData(null);
+    toast.success(`${newFields.length} colunas e ${mappedRows.length} linhas importadas!`);
   };
 
-  // --- NOVA FUNÇÃO DE CORREÇÃO DE DATA ---
-  const formatDateForDb = (value: string) => {
-    if (!value) return null;
-    // Tenta detectar formato BR: DD/MM/YYYY
-    // Regex: pega 1 ou 2 digitos / 1 ou 2 digitos / 4 digitos
-    const brDateRegex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/;
-    const match = value.match(brDateRegex);
-
-    if (match) {
-        const day = match[1].padStart(2, '0');
-        const month = match[2].padStart(2, '0');
-        const year = match[3];
-        return `${year}-${month}-${day}`; // Retorna YYYY-MM-DD (ISO)
-    }
-    return value; // Se não bater o regex, retorna original (pode já ser ISO ou inválido)
-  };
 
   // --- SAVE LOGIC ---
   const handleSave = async () => {
     if (!name.trim()) return toast.error("Dê um nome ao sistema");
     setLoading(true);
-    console.log("=== INICIANDO SALVAMENTO ===");
     
     try {
-      // 1. MÓDULO
-      const slug = generateDbName(name) + '-' + Math.floor(Math.random()*9000);
-      console.log("1. Criando módulo:", slug);
-
+      const systemSlug = generateDbName(name) + '-' + Math.floor(Math.random()*9000);
+      
+      // 1. Criar Módulo
       const { data: module, error: modError } = await supabase.from('crud_modules')
-        .insert({ name, description, slug, created_by: user?.id, is_active: true })
+        .insert({ name, description, slug: systemSlug, created_by: profile?.id, is_active: true })
         .select().single();
 
-      if (modError) throw new Error("Erro módulo: " + modError.message);
-      if (!module) throw new Error("Módulo não retornado.");
+      if (modError) throw new Error(modError.message);
 
-      // 2. TABELAS
+      if (profile && profile.role !== 'administrador') {
+         await supabase.from('profile_modules').insert({ profile_id: profile.id, crud_module_id: module.id });
+      }
+
+      // 2. Criar Tabelas e Campos
       for (const table of tables) {
-          console.log(`2. Criando tabela: ${table.name}`);
+          const dbTableName = generateDbName(table.name) + `_${Math.floor(Math.random()*1000)}`;
+
           const { data: dbTable, error: tableError } = await supabase.from('crud_tables')
-            .insert({ crud_module_id: module.id, name: table.name, db_table_name: generateDbName(table.name) })
+            .insert({ crud_module_id: module.id, name: table.name, db_table_name: dbTableName })
             .select().single();
           
-          if (tableError) throw new Error("Erro tabela: " + tableError.message);
+          if (tableError) throw new Error(tableError.message);
 
-          const fieldIdToDbName: Record<string, string> = {};
+          const headerToDbColumn: Record<string, string> = {};
 
-          // 3. CAMPOS
-          console.log(`3. Criando campos...`);
           if (table.fields.length > 0) {
             const fieldsToInsert = table.fields.map((f, i) => {
-                const dbName = generateDbName(f.label) + `_${i}`; 
-                fieldIdToDbName[f.id] = dbName; 
+                const dbColName = generateDbName(f.label) + `_${i}`; 
+                headerToDbColumn[f.label] = dbColName;
+
                 return {
-                    crud_table_id: dbTable.id, name: dbName, label: f.label, field_type: f.type, 
-                    is_required: f.required, options: JSON.stringify(f.options), order_index: i
+                    crud_table_id: dbTable.id, 
+                    name: dbColName, 
+                    label: f.label, 
+                    field_type: f.type, 
+                    is_required: f.required, 
+                    options: f.type === 'select' ? f.options : null,
+                    order_index: i
                 };
             });
 
             const { error: fError } = await supabase.from('crud_fields').insert(fieldsToInsert);
             if (fError) throw new Error("Erro campos: " + fError.message);
-          }
 
-          // 4. DADOS (COM CORREÇÃO DE DATA)
-          if (table.rows && table.rows.length > 0) {
-              console.log(`4. Preparando ${table.rows.length} registros...`);
-              const batchId = crypto.randomUUID();
-
-              // Filtra linhas vazias
-              const validRows = table.rows.filter(r => r && typeof r === 'object');
-
-              const recordsToInsert = validRows.map(row => {
-                  const recordData: any = {};
-                  recordData['_batch_id'] = batchId;
-
-                  Object.keys(row).forEach(fieldId => {
-                      const fieldDef = table.fields.find(f => f.id === fieldId);
-                      const dbName = fieldIdToDbName[fieldId];
-                      let value = row[fieldId];
-
-                      // --- AQUI A CORREÇÃO DE DATA ---
-                      if (fieldDef?.type === 'date' && value) {
-                          value = formatDateForDb(value);
-                      }
-                      // -------------------------------
-
-                      if (dbName && value !== undefined) {
-                          recordData[dbName] = value;
-                      }
+            // 3. INSERIR DADOS IMPORTADOS
+            if (table.rows.length > 0) {
+               const rowsPayload = table.rows.map(row => {
+                  const dbRow: any = {};
+                  Object.keys(row).forEach(csvHeader => {
+                     const dbCol = headerToDbColumn[csvHeader];
+                     if (dbCol) {
+                        let val = row[csvHeader];
+                        if (val === "") val = null;
+                        dbRow[dbCol] = val;
+                     }
                   });
-                  return {
-                      crud_table_id: dbTable.id, data: recordData, created_by: user?.id, status: 'pending'
-                  };
-              });
-              
-              // Insere em lotes de 50
-              const BATCH_SIZE = 50; 
-              for (let i = 0; i < recordsToInsert.length; i += BATCH_SIZE) {
-                  console.log(`   Inserindo lote ${i}...`);
-                  const chunk = recordsToInsert.slice(i, i + BATCH_SIZE);
-                  const { error: rError } = await supabase.from('crud_records').insert(chunk);
-                  if (rError) console.error(`ERRO LOTE ${i}:`, rError);
-              }
+                  return dbRow;
+               });
+
+               if (rowsPayload.length > 0) {
+                 const { error: dataError } = await supabase.from(dbTableName).insert(rowsPayload);
+                 if (dataError) {
+                    console.error("Erro insert dados:", dataError);
+                    toast.warning("Estrutura criada, mas houve erro na importação dos dados.");
+                 }
+               }
+            }
           }
       }
       
@@ -313,79 +301,85 @@ export default function NewModule() {
 
   return (
     <div className="max-w-5xl mx-auto pb-32 animate-in fade-in duration-500 relative">
-       {/* MODAL CSV */}
-       {csvModalOpen && csvData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
-            <div className="p-6 border-b flex justify-between items-center">
-              <div>
-                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                  <FileSpreadsheet className="text-green-600" /> Configurar Importação
-                </h2>
-                <p className="text-sm text-slate-500 mt-1">
-                  Arquivo: <span className="font-mono text-slate-700 bg-slate-100 px-1 rounded">{csvData.filename}.csv</span> ({csvData.rows.length} linhas)
-                </p>
+       
+       {/* MODAL DE IMPORTAÇÃO CSV */}
+       <Dialog open={csvModalOpen} onOpenChange={setCsvModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="p-6 border-b bg-slate-50">
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              <div className="bg-green-100 p-2 rounded-lg text-green-700">
+                <FileSpreadsheet className="w-6 h-6" />
               </div>
-              <div className="flex bg-slate-100 p-1 rounded-lg">
-                <button onClick={() => setImportMode('create')} className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${importMode === 'create' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>Criar Nova Tabela</button>
-                <button onClick={() => setImportMode('update')} className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${importMode === 'update' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>Unir à Tabela Atual</button>
-              </div>
-            </div>
-            
-            <div className="p-0 overflow-y-auto flex-1 bg-slate-50/50">
-                <div className="grid grid-cols-[1fr_2fr_2fr] gap-4 px-6 py-3 bg-slate-100 text-xs font-bold text-slate-600 border-b sticky top-0 z-10">
-                    <div>COLUNA NO CSV</div>
-                    <div>DESTINO NO SISTEMA</div>
-                    <div>CONFIGURAÇÃO</div>
-                </div>
-                <div className="divide-y divide-slate-100">
-                    {csvData.headers.map((header, idx) => {
-                        const action = columnMapping[header];
-                        const config = columnConfigs[header];
-                        return (
-                            <div key={idx} className="grid grid-cols-[1fr_2fr_2fr] gap-4 px-6 py-4 items-start bg-white hover:bg-slate-50 transition-colors">
-                                <div><div className="text-sm font-bold text-slate-700 truncate" title={header}>{header}</div><div className="text-[10px] text-slate-400 mt-1 truncate">Ex: {csvData.rows[0]?.[header] || '(vazio)'}</div></div>
-                                <div className="flex items-center gap-2"><ArrowRight className="h-4 w-4 text-slate-300 flex-shrink-0" />{importMode === 'create' ? (<span className="text-sm font-medium text-green-600 bg-green-50 px-2 py-1 rounded border border-green-100">Será criado novo campo</span>) : (<select className="w-full text-sm border-slate-200 rounded-md py-1.5 focus:ring-blue-500 focus:border-blue-500" value={action} onChange={(e) => setColumnMapping(prev => ({ ...prev, [header]: e.target.value }))}><option value="new" className="text-green-600 font-bold">+ Criar Novo Campo</option><option value="ignore" className="text-slate-400">-- Ignorar Coluna --</option><optgroup label="Campos Existentes">{activeTable.fields.map(f => (<option key={f.id} value={f.id}>{f.label || '(Sem título)'}</option>))}</optgroup></select>)}</div>
-                                <div>
-                                    {(importMode === 'create' || action === 'new') ? (
-                                        <div className="space-y-2 animate-in fade-in">
-                                            <div className="flex items-center gap-2">
-                                                <Label className="text-[10px] uppercase text-slate-400 w-12">Tipo:</Label>
-                                                <select className="flex-1 text-sm border-slate-200 rounded-md py-1.5" value={config.type} onChange={(e) => setColumnConfigs(prev => ({ ...prev, [header]: { ...prev[header], type: e.target.value } }))}>
-                                                    {QUESTION_TYPES.map(t => (<option key={t.id} value={t.id}>{t.label}</option>))}
-                                                </select>
-                                            </div>
-                                            {/* CHECKBOX PARA EXTRAIR OPÇÕES */}
-                                            {config.type === 'select' && (
-                                                <div className="flex items-center gap-2 ml-[56px] mt-1">
-                                                    <input 
-                                                        type="checkbox" 
-                                                        id={`extract-${idx}`}
-                                                        className="rounded border-slate-300 text-[#003B8F] focus:ring-[#003B8F]"
-                                                        checked={config.extractOptions}
-                                                        onChange={(e) => setColumnConfigs(prev => ({ ...prev, [header]: { ...prev[header], extractOptions: e.target.checked } }))}
-                                                    />
-                                                    <label htmlFor={`extract-${idx}`} className="text-xs text-slate-600 cursor-pointer select-none">Extrair opções únicas</label>
-                                                </div>
-                                            )}
-                                        </div>
-                                    ) : (action !== 'ignore' && <span className="text-xs text-slate-400 italic">Usando configuração atual do campo</span>)}
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-            <div className="p-6 border-t bg-slate-50 rounded-b-xl flex justify-end gap-3">
-              <Button variant="ghost" onClick={() => { setCsvModalOpen(false); setCsvData(null); }}>Cancelar</Button>
-              <Button onClick={processCsvImport} className="bg-[#003B8F] hover:bg-blue-800"><CheckSquare className="mr-2 h-4 w-4" /> Importar Estrutura e Dados</Button>
-            </div>
-          </div>
-        </div>
-      )}
+              Configurar Importação
+            </DialogTitle>
+            <p className="text-slate-500 text-sm mt-1">
+              Arquivo: <span className="font-mono font-medium text-slate-700">{csvPreview?.fileName}</span> 
+              ({csvPreview?.rows.length} linhas)
+            </p>
+          </DialogHeader>
 
-      {/* HEADER E NAVIGATION */}
-      <div className="sticky top-0 z-30 bg-slate-50/95 backdrop-blur border-b py-4 mb-8">
+          <div className="flex-1 overflow-y-auto p-6 bg-slate-50/30">
+             <div className="rounded-xl border border-slate-200 overflow-hidden bg-white shadow-sm">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-slate-100 text-slate-600 font-semibold uppercase text-xs">
+                    <tr>
+                      <th className="px-4 py-3 w-1/3">Coluna no CSV</th>
+                      <th className="px-4 py-3 w-1/3 text-center"><ArrowRight className="mx-auto w-4 h-4 text-slate-400"/></th>
+                      <th className="px-4 py-3 w-1/3">Configuração (Tipo)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {csvPreview?.headers.map((header, i) => (
+                      <tr key={i} className="hover:bg-slate-50 transition-colors group">
+                        <td className="px-4 py-3">
+                           <div className="font-medium text-slate-700">{header}</div>
+                           <div className="text-xs text-slate-400 mt-0.5 truncate max-w-[200px]">
+                              Ex: {csvPreview.rows[0][header]}, {csvPreview.rows[1]?.[header]}...
+                           </div>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 border border-green-200">
+                             Será criado novo campo
+                           </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <Select 
+                            value={columnConfig[header]} 
+                            onValueChange={(val) => setColumnConfig(prev => ({...prev, [header]: val}))}
+                          >
+                            <SelectTrigger className="h-9 border-slate-200 bg-slate-50 focus:bg-white transition-all">
+                               <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                               {QUESTION_TYPES.map(t => (
+                                 <SelectItem key={t.id} value={t.id}>
+                                    <div className="flex items-center gap-2">
+                                       <t.icon className="w-4 h-4 text-slate-400"/>
+                                       {t.label}
+                                    </div>
+                                 </SelectItem>
+                               ))}
+                            </SelectContent>
+                          </Select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+             </div>
+          </div>
+
+          <DialogFooter className="p-4 border-t bg-white flex justify-between items-center">
+             <Button variant="ghost" onClick={() => setCsvModalOpen(false)}>Cancelar</Button>
+             <Button onClick={confirmImport} className="bg-[#003B8F] hover:bg-blue-800 text-white gap-2">
+                <Upload className="w-4 h-4" /> Importar Estrutura e Dados
+             </Button>
+          </DialogFooter>
+        </DialogContent>
+       </Dialog>
+
+       {/* HEADER & NAV */}
+       <div className="sticky top-0 z-30 bg-slate-50/95 backdrop-blur border-b py-4 mb-8">
         <div className="flex items-center justify-between">
           <Button variant="ghost" onClick={() => navigate('/modulos')} className="text-slate-500 hover:text-[#003B8F]">
             <ArrowLeft className="mr-2 h-4 w-4" /> Cancelar
@@ -402,148 +396,134 @@ export default function NewModule() {
           )}
         </div>
       </div>
-      
-      {/* CONTEÚDO PRINCIPAL */}
-      <div className="space-y-8">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-[#003B8F]">{step === 1 ? 'Vamos começar!' : 'Estrutura de Dados'}</h1>
-          <p className="text-slate-500">{step === 1 ? 'Identifique seu novo sistema.' : 'Crie tabelas e adicione colunas.'}</p>
-        </div>
 
-        {step === 1 && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-xl mx-auto">
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 space-y-6">
-              <div className="space-y-2">
-                <Label className="text-base font-semibold text-slate-700">Qual o nome do sistema?</Label>
-                <Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Gestão de Projetos..." className="text-lg h-12" autoFocus />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-base font-semibold text-slate-700">Descrição curta</Label>
-                <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Objetivo do sistema..." className="resize-none" />
-              </div>
-              <Button onClick={() => { if(!name.trim()) return toast.error("Nome é obrigatório"); setStep(2); }} className="w-full h-12 text-lg bg-[#003B8F] hover:bg-blue-800">
-                Continuar <ArrowLeft className="ml-2 h-5 w-5 rotate-180" />
-              </Button>
-            </div>
-          </motion.div>
-        )}
+       {step === 1 && (
+         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-xl mx-auto">
+           <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 space-y-6">
+             <div className="space-y-2">
+               <Label className="text-base font-semibold text-slate-700">Qual o nome do sistema?</Label>
+               <Input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Gestão de Projetos..." className="text-lg h-12" autoFocus />
+             </div>
+             <div className="space-y-2">
+               <Label className="text-base font-semibold text-slate-700">Descrição curta</Label>
+               <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Objetivo do sistema..." className="resize-none" />
+             </div>
+             <Button onClick={() => { if(!name.trim()) return toast.error("Nome é obrigatório"); setStep(2); }} className="w-full h-12 text-lg bg-[#003B8F] hover:bg-blue-800">
+               Continuar <ArrowLeft className="ml-2 h-5 w-5 rotate-180" />
+             </Button>
+           </div>
+         </motion.div>
+       )}
 
-        {step === 2 && (
-          <div className="grid lg:grid-cols-[300px_1fr] gap-8 items-start">
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm sticky top-24">
-              <h3 className="font-bold text-slate-700 mb-4 px-2">Tipos de Coluna</h3>
-              <div className="grid grid-cols-1 gap-2">
-                {QUESTION_TYPES.map(type => (
-                  <button key={type.id} onClick={() => addField(type.id)} className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all text-left group">
-                    <div className={`p-2 rounded-md ${type.color} group-hover:scale-110 transition-transform`}><type.icon className="h-4 w-4" /></div>
-                    <div><p className="text-sm font-medium text-slate-700">{type.label}</p><p className="text-[10px] text-slate-400 leading-tight">{type.desc}</p></div>
-                    <Plus className="h-4 w-4 ml-auto text-slate-300 opacity-0 group-hover:opacity-100" />
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-6 min-h-[500px]">
-              <div className="flex flex-col gap-3 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
-                <div className="flex items-center justify-between px-2 pt-1">
-                    <span className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
-                        <TableIcon className="h-3 w-3"/> Tabelas do Módulo
-                    </span>
-                    <div className="flex gap-2">
-                        <input type="file" ref={fileInputRef} accept=".csv" className="hidden" onChange={handleFileUpload} />
-                        <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} className="h-6 text-xs border-green-200 hover:bg-green-50 text-green-700">
-                            <Upload className="h-3 w-3 mr-1" /> Importar CSV
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => addTable()} className="h-6 text-xs text-[#003B8F] hover:bg-blue-50">
-                            <Plus className="h-3 w-3 mr-1" /> Nova Tabela
+       {step === 2 && (
+             <div className="grid lg:grid-cols-[300px_1fr] gap-8 items-start">
+               
+               {/* Sidebar de Componentes */}
+               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm sticky top-24">
+                 <h3 className="font-bold text-slate-700 mb-4 px-2">Tipos de Coluna</h3>
+                 <div className="grid grid-cols-1 gap-2">
+                   {QUESTION_TYPES.map(type => (
+                     <button key={type.id} onClick={() => addField(type.id)} className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all text-left group">
+                       <div className={`p-2 rounded-md ${type.color} group-hover:scale-110 transition-transform`}><type.icon className="h-4 w-4" /></div>
+                       <div><p className="text-sm font-medium text-slate-700">{type.label}</p><p className="text-[10px] text-slate-400 leading-tight">{type.desc}</p></div>
+                       <Plus className="h-4 w-4 ml-auto text-slate-300 opacity-0 group-hover:opacity-100" />
+                     </button>
+                   ))}
+                 </div>
+               </div>
+               
+               {/* Área de Canvas */}
+               <div className="space-y-6 min-h-[500px]">
+                  <div className="flex flex-col gap-3 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between px-2 pt-1">
+                        <span className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2"><TableIcon className="h-3 w-3"/> Tabelas do Módulo</span>
+                        <div className="flex gap-2">
+                          <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".csv" />
+                          <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} className="h-6 text-xs border-green-200 text-green-700 hover:bg-green-50 hover:text-green-800">
+                            <FileSpreadsheet className="h-3 w-3 mr-1" /> Importar CSV
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => addTable()} className="h-6 text-xs text-[#003B8F] hover:bg-blue-50"><Plus className="h-3 w-3 mr-1" /> Nova Tabela</Button>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 px-1">
+                        {tables.map(table => (
+                            <div key={table.id} onClick={() => setActiveTableId(table.id)} className={`cursor-pointer px-4 py-2 rounded-lg text-sm font-medium border transition-all flex items-center gap-2 select-none ${activeTableId === table.id ? 'bg-[#003B8F] text-white border-[#003B8F] shadow-md' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+                                {table.name}
+                                {table.rows.length > 0 && <span className="bg-white/20 px-1.5 rounded text-[10px]">{table.rows.length} dados</span>}
+                                {tables.length > 1 && <div onClick={(e) => removeTable(table.id, e)} className="hover:bg-white/20 p-0.5 rounded-full ml-1"><X className="h-3 w-3" /></div>}
+                            </div>
+                        ))}
+                      </div>
+                      <div className="border-t pt-2 px-1">
+                         <Input value={activeTable.name} onChange={(e) => renameActiveTable(e.target.value)} className="h-8 border-transparent hover:border-slate-200 focus:border-[#003B8F] font-bold text-slate-700 px-2" placeholder="Nome da Tabela" />
+                      </div>
+                  </div>
+                  
+                  {activeTable.fields.length === 0 ? (
+                    <div className="border-2 border-dashed border-slate-300 rounded-2xl p-12 text-center bg-slate-50/50">
+                        <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm"><List className="h-8 w-8 text-slate-300" /></div>
+                        <h3 className="text-lg font-medium text-slate-600">Tabela Vazia</h3>
+                        <p className="text-slate-400 mb-4">Adicione colunas manualmente ou importe um CSV.</p>
+                        <Button variant="outline" onClick={() => fileInputRef.current?.click()} className="text-[#003B8F] border-blue-200 hover:bg-blue-50">
+                          <Upload className="w-4 h-4 mr-2"/> Importar Dados
                         </Button>
                     </div>
-                </div>
-                
-                <div className="flex flex-wrap gap-2 px-1">
-                    {tables.map(table => (
-                        <div key={table.id} onClick={() => setActiveTableId(table.id)} className={`cursor-pointer px-4 py-2 rounded-lg text-sm font-medium border transition-all flex items-center gap-2 select-none ${activeTableId === table.id ? 'bg-[#003B8F] text-white border-[#003B8F] shadow-md' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'}`}>
-                            {table.name}
-                            {tables.length > 1 && <div onClick={(e) => removeTable(table.id, e)} className="hover:bg-white/20 p-0.5 rounded-full ml-1"><X className="h-3 w-3" /></div>}
-                        </div>
-                    ))}
-                </div>
-                <div className="border-t pt-2 px-1">
-                    <Input value={activeTable.name} onChange={(e) => renameActiveTable(e.target.value)} className="h-8 border-transparent hover:border-slate-200 focus:border-[#003B8F] font-bold text-slate-700 px-2" placeholder="Nome da Tabela" />
-                </div>
-              </div>
+                  ) : (
+                    <Reorder.Group axis="y" values={activeTable.fields} onReorder={handleReorder} className="space-y-4">
+                        <AnimatePresence>
+                           {activeTable.fields.map((field) => {
+                             const typeInfo = QUESTION_TYPES.find(t => t.id === field.type) || QUESTION_TYPES[0];
+                             
+                             return (
+                              <Reorder.Item key={field.id} value={field} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm group hover:border-blue-300 transition-colors relative">
+                                 <div className="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-xl bg-slate-200 group-hover:bg-[#003B8F] transition-colors" />
+                                 <div className="flex items-start gap-4 pl-4">
+                                    <div className="mt-3 text-slate-300 cursor-grab active:cursor-grabbing hover:text-[#003B8F]"><GripVertical className="h-5 w-5" /></div>
+                                    <div className="flex-1 space-y-3">
+                                       
+                                       {/* IDENTIFICAÇÃO DO TIPO (Badge + Ícone) */}
+                                       <div className="flex items-center justify-between">
+                                           <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wide ${typeInfo.color}`}>
+                                              <typeInfo.icon className="w-3.5 h-3.5" />
+                                              {typeInfo.label}
+                                           </div>
+                                           <Button variant="ghost" size="icon" onClick={() => removeField(field.id)} className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-50">
+                                              <Trash2 className="h-4 w-4" />
+                                           </Button>
+                                       </div>
 
-              {activeTable.fields.length === 0 ? (
-                <div className="border-2 border-dashed border-slate-300 rounded-2xl p-12 text-center bg-slate-50/50">
-                  <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm"><List className="h-8 w-8 text-slate-300" /></div>
-                  <h3 className="text-lg font-medium text-slate-600">Tabela Vazia</h3>
-                  <p className="text-slate-400">Adicione colunas manualmente ou importe um CSV.</p>
-                  <Button variant="outline" onClick={() => fileInputRef.current?.click()} className="mt-4"><Upload className="h-4 w-4 mr-2" /> Carregar CSV</Button>
-                </div>
-              ) : (
-                <Reorder.Group axis="y" values={activeTable.fields} onReorder={handleReorder} className="space-y-4">
-                  <AnimatePresence>
-                    {activeTable.fields.map((field) => {
-                      const typeDef = QUESTION_TYPES.find(t => t.id === field.type);
-                      return (
-                        <Reorder.Item key={field.id} value={field} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm group hover:border-blue-300 transition-colors relative">
-                          <div className="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-xl bg-slate-200 group-hover:bg-[#003B8F] transition-colors" />
-                          <div className="flex items-start gap-4 pl-4">
-                            <div className="mt-3 text-slate-300 cursor-grab active:cursor-grabbing hover:text-[#003B8F]"><GripVertical className="h-5 w-5" /></div>
-                            <div className="flex-1 space-y-4">
-                              <div className="flex justify-between items-start">
-                                <div className="space-y-1 flex-1 mr-4">
-                                  {typeDef && (
-                                    <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-bold mb-1 ${typeDef.badge}`}>
-                                        <typeDef.icon className="h-3 w-3" /> {typeDef.label}
+                                       <div className="space-y-1">
+                                          <Input value={field.label} onChange={e => updateField(field.id, 'label', e.target.value)} placeholder="Nome do campo..." className="text-lg font-medium border-0 border-b border-slate-200 rounded-none px-0 focus-visible:ring-0 focus-visible:border-[#003B8F] bg-transparent h-auto py-1" />
+                                       </div>
+                                       
+                                       {/* Opções (Se for Select) */}
+                                       {field.type === 'select' && (
+                                         <div className="bg-slate-50 p-4 rounded-lg space-y-3 mt-2 border border-slate-100">
+                                             <p className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1"><List className="w-3 h-3"/> Opções Disponíveis</p>
+                                             <div className="flex flex-wrap gap-2">
+                                                 {field.options?.map((opt: any, i: number) => (
+                                                     <span key={i} className="bg-white border px-3 py-1 rounded-full text-sm flex items-center gap-2 shadow-sm text-slate-600">{opt.label} <X className="h-3 w-3 cursor-pointer text-slate-400 hover:text-red-500" onClick={() => { const newOpts = field.options.filter((_: any, idx: number) => idx !== i); updateField(field.id, 'options', newOpts); }}/></span>
+                                                 ))}
+                                             </div>
+                                             <div className="flex gap-2">
+                                                 <Input id={`opt-${field.id}`} placeholder="Digite e Enter..." className="bg-white h-9 text-sm" onKeyDown={e => { if(e.key === 'Enter') { e.preventDefault(); handleAddOption(field.id); }}} />
+                                                 <Button size="sm" variant="secondary" onClick={() => handleAddOption(field.id)}>Adicionar</Button>
+                                             </div>
+                                         </div>
+                                       )}
+                                       
+                                       <div className="flex items-center gap-2 pt-1"><Switch checked={field.required} onCheckedChange={c => updateField(field.id, 'required', c)} /><span className="text-sm text-slate-500">Obrigatório?</span></div>
                                     </div>
-                                  )}
-                                  <Input value={field.label} onChange={e => updateField(field.id, 'label', e.target.value)} placeholder={`Dê um nome para esta coluna...`} className="text-lg font-medium border-0 border-b-2 border-slate-100 rounded-none px-0 focus-visible:ring-0 focus-visible:border-[#003B8F] bg-transparent" />
-                                </div>
-                                <Button variant="ghost" size="icon" onClick={() => removeField(field.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50"><Trash2 className="h-5 w-5" /></Button>
-                              </div>
-                              
-                              {/* --- OPÇÕES SELECT --- */}
-                              {field.type === 'select' && (
-                                <div className="bg-slate-50 p-4 rounded-lg space-y-3">
-                                  <p className="text-xs font-bold text-slate-500 uppercase">Opções ({field.options?.length || 0})</p>
-                                  <div className="flex flex-wrap gap-2">
-                                    {field.options?.map((opt: any, i: number) => (
-                                      <span key={i} className="bg-white border px-3 py-1 rounded-full text-sm flex items-center gap-2">
-                                        {opt.label} <X className="h-3 w-3 cursor-pointer text-slate-400 hover:text-red-500" onClick={() => { const newOpts = field.options.filter((_: any, idx: number) => idx !== i); updateField(field.id, 'options', newOpts); }}/>
-                                      </span>
-                                    ))}
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <Input 
-                                        id={`opt-${field.id}`} 
-                                        placeholder="Nova opção..." 
-                                        className="bg-white h-9" 
-                                        onKeyDown={e => { 
-                                            if(e.key === 'Enter') { 
-                                                e.preventDefault(); 
-                                                handleAddOption(field.id);
-                                            } 
-                                        }}
-                                    />
-                                    <Button size="sm" variant="secondary" onClick={() => handleAddOption(field.id)}>Adicionar</Button>
-                                  </div>
-                                </div>
-                              )}
-                              
-                              <div className="flex items-center gap-2 pt-2"><Switch checked={field.required} onCheckedChange={c => updateField(field.id, 'required', c)} /><span className="text-sm text-slate-600">Preenchimento Obrigatório?</span></div>
-                            </div>
-                          </div>
-                        </Reorder.Item>
-                      );
-                    })}
-                  </AnimatePresence>
-                </Reorder.Group>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+                                 </div>
+                              </Reorder.Item>
+                             );
+                           })}
+                        </AnimatePresence>
+                    </Reorder.Group>
+                  )}
+               </div>
+             </div>
+       )}
     </div>
   );
 }

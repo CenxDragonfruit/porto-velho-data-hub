@@ -13,8 +13,9 @@ import NewModule from "./pages/NewModule";
 import EditModule from "./pages/EditModule"; 
 import CrudPage from "./pages/CrudPage";   
 import Approvals from "./pages/Approvals"; 
-import Team from "./pages/Team"; // Página de Gestão de Equipe
+import Team from "./pages/Team"; 
 import Profile from "./pages/Profile";
+import AuditLogs from "./pages/AuditLogs"; // IMPORTANTE: Sua página de logs já criada
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,32 +27,23 @@ const App = () => (
         <Toaster />
         <BrowserRouter>
           <Routes>
-            {/* Rota Pública (Login) */}
+            {/* Rota Pública */}
             <Route path="/auth" element={<Auth />} />
             
-            {/* Rotas Privadas (Com Layout) */}
+            {/* Rotas Protegidas */}
             <Route element={<Layout />}>
               <Route path="/" element={<Dashboard />} />
-              
-              {/* Gestão de Módulos (Meus Sistemas) */}
               <Route path="/modulos" element={<Modules />} />
               <Route path="/modulos/novo" element={<NewModule />} />
               <Route path="/modulos/editar/:id" element={<EditModule />} /> 
-              
-              {/* O Sistema em si (Acessado pelo Slug, ex: /crud/escolas) */}
               <Route path="/crud/:slug" element={<CrudPage />} />
-              
-              {/* Central de Aprovações */}
               <Route path="/aprovacoes" element={<Approvals />} />
-
-              {/* Gestão de Equipe (RBAC - Supervisores/Admins) */}
               <Route path="/equipe" element={<Team />} />
-              
-              {/* Perfil */}
               <Route path="/perfil" element={<Profile />} />
+              {/* Rota de Auditoria */}
+              <Route path="/auditoria" element={<AuditLogs />} />
             </Route>
 
-            {/* Rota 404 */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

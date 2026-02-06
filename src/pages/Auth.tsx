@@ -16,7 +16,7 @@ export default function Auth() {
   const { user, signIn, loading: authLoading } = useAuth();
 
   // ------------------------------------------------------------------
-  // 1. TODOS OS HOOKS DEVEM FICAR AQUI NO TOPO (Antes de qualquer return)
+  // ESTADOS
   // ------------------------------------------------------------------
   const [step, setStep] = useState<AuthStep>('CHECK_EMAIL');
   const [loading, setLoading] = useState(false);
@@ -24,10 +24,10 @@ export default function Auth() {
   // Dados do formulário
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
+  const [nomeCompleto, setNomeCompleto] = useState("");
 
   // ------------------------------------------------------------------
-  // 2. AGORA SIM PODEMOS FAZER O REDIRECIONAMENTO CONDICIONAL
+  // REDIRECIONAMENTO SE JÁ LOGADO
   // ------------------------------------------------------------------
   if (user && !authLoading) {
     return <Navigate to="/" replace />;
@@ -40,28 +40,34 @@ export default function Auth() {
     setLoading(true);
 
     try {
-      // Verifica na tabela PROFILES se o e-mail existe
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('full_name, user_id')
+      // CORREÇÃO CRÍTICA: Busca na tabela 'usuarios' (Novo Banco), não 'profiles'
+      const { data: usuario, error } = await supabase
+        .from('usuarios')
+        .select('nome_completo, ultimo_login, is_ativo')
         .eq('email', email)
         .maybeSingle();
 
       if (error) throw error;
 
-      if (!profile) {
-        toast.error("E-mail não encontrado.", { description: "Solicite seu cadastro ao administrador." });
+      if (!usuario) {
+        toast.error("E-mail não encontrado.", { description: "Solicite seu cadastro ao administrador da SMTI." });
         setLoading(false);
         return;
       }
 
-      setFullName(profile.full_name || "");
+      if (usuario.is_ativo === false) {
+        toast.error("Acesso inativado.", { description: "Entre em contato com seu supervisor." });
+        setLoading(false);
+        return;
+      }
 
-      if (profile.user_id) {
-        // Já tem login vinculado -> Vai para tela de Senha
+      setNomeCompleto(usuario.nome_completo || "");
+
+      // LÓGICA DE PRIMEIRO ACESSO:
+      // Se 'ultimo_login' for nulo, o usuário foi criado via SQL e nunca entrou
+      if (usuario.ultimo_login) {
         setStep('LOGIN');
       } else {
-        // Existe na tabela mas não tem login -> Vai para Criar Senha
         setStep('CREATE_PASSWORD');
       }
 
@@ -73,30 +79,35 @@ export default function Auth() {
     }
   };
 
-  // --- PASSO 2A: LOGIN (Usuário já tem senha) ---
+  // --- PASSO 2A: LOGIN (Usuário recorrente) ---
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
       const { error } = await signIn(email, password);
       if (error) throw error;
+      
+      // Atualiza o último login no banco para fins de auditoria
+      await supabase
+        .from('usuarios')
+        .update({ ultimo_login: new Date().toISOString() })
+        .eq('email', email);
+
       toast.success("Bem-vindo de volta!");
       navigate("/");
     } catch (error: any) {
       console.error("Erro no login:", error);
-      
-      // Tratamento específico para e-mail não confirmado
       if (error.message && error.message.includes("Email not confirmed")) {
-        toast.error("E-mail não confirmado.", { description: "Verifique se a confirmação de e-mail está desativada no Supabase." });
+        toast.error("E-mail não confirmado.", { description: "Verifique sua caixa de entrada." });
       } else {
-        toast.error(error.message || "Senha incorreta ou erro no login.");
+        toast.error("Senha incorreta ou erro no login.");
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // --- PASSO 2B: PRIMEIRO ACESSO (Criar senha) ---
+  // --- PASSO 2B: PRIMEIRO ACESSO (Criar senha / Ativar conta) ---
   const handleFirstAccess = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password.length < 6) {
@@ -105,29 +116,41 @@ export default function Auth() {
     }
     setLoading(true);
     try {
-      // 1. Cria o usuário no Auth
+      // 1. Cria a conta no Supabase Auth (Authentication)
       const { data: authData, error: authError } = await supabase.auth.signUp({ 
         email, 
         password,
-        options: { data: { full_name: fullName } }
+        options: { 
+            data: { nome_completo: nomeCompleto } 
+        }
       });
 
       if (authError) throw authError;
 
       if (authData.user) {
-        // 2. Vincula o user_id novo ao perfil existente (ativação)
+        // 2. Marca o registro como 'ativado' preenchendo o ultimo_login
         const { error: updateError } = await supabase
-            .from('profiles')
-            .update({ user_id: authData.user.id })
+            .from('usuarios')
+            .update({ ultimo_login: new Date().toISOString() })
             .eq('email', email);
 
-        if (updateError) throw updateError;
+        if (updateError) {
+            console.error("Erro ao atualizar status do usuário", updateError);
+        }
 
         toast.success("Conta ativada com sucesso!");
-        // O próprio AuthProvider/Listener deve detectar o login, mas navegamos por garantia
         navigate("/");
       }
     } catch (error: any) {
+        // Se o erro for "User already registered", significa que ele já tem conta Auth
+        if (error.message?.includes("already registered")) {
+            toast.info("Usuário já registrado. Tentando realizar login...");
+            const { error: loginError } = await signIn(email, password);
+            if (!loginError) {
+                navigate("/");
+                return;
+            }
+        }
         toast.error("Erro ao ativar conta: " + error.message);
     } finally {
         setLoading(false);
@@ -136,10 +159,11 @@ export default function Auth() {
 
   // Títulos dinâmicos
   const getHeader = () => {
+    const primeiroNome = nomeCompleto.split(' ')[0];
     switch (step) {
         case 'CHECK_EMAIL': return { title: "Acesso ao Sistema", desc: "Digite seu e-mail corporativo para continuar." };
-        case 'LOGIN': return { title: `Olá, ${fullName.split(' ')[0]}`, desc: "Digite sua senha para entrar." };
-        case 'CREATE_PASSWORD': return { title: "Primeiro Acesso", desc: `Olá ${fullName.split(' ')[0]}, defina sua senha.` };
+        case 'LOGIN': return { title: `Olá, ${primeiroNome}`, desc: "Digite sua senha para entrar." };
+        case 'CREATE_PASSWORD': return { title: "Primeiro Acesso", desc: `Olá ${primeiroNome}, defina sua senha.` };
     }
   };
 
@@ -148,7 +172,7 @@ export default function Auth() {
   return (
     <div className="min-h-screen w-full flex flex-col md:flex-row bg-white">
       {/* LADO ESQUERDO (Banner) */}
-      <div className="md:w-1/2 bg-[#003B8F] p-8 flex flex-col justify-between relative overflow-hidden text-white hidden md:flex">
+      <div className="hidden md:flex md:w-1/2 bg-[#003B8F] p-8 flex-col justify-between relative overflow-hidden text-white">
         <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'url("https://www.portovelho.ro.gov.br/logo/Brasao_municipal.svg")', backgroundRepeat: 'no-repeat', backgroundPosition: 'center', backgroundSize: '80%' }} />
         <div className="relative z-10 pt-4"><img src="https://www.portovelho.ro.gov.br/logo/SMTI_horizontal_branco.png" alt="SMTI Logo" className="h-14 w-auto object-contain object-left" /></div>
         <div className="relative z-10 max-w-md">
@@ -199,7 +223,7 @@ export default function Auth() {
             {/* ESTADO 2: LOGIN COM SENHA */}
             {step === 'LOGIN' && (
                 <form onSubmit={handleLogin} className="space-y-4 animate-in fade-in slide-in-from-right-8">
-                     <div className="p-3 bg-blue-50 rounded-lg flex items-center gap-3 mb-4 border border-blue-100">
+                      <div className="p-3 bg-blue-50 rounded-lg flex items-center gap-3 mb-4 border border-blue-100">
                         <div className="bg-white p-1.5 rounded-full"><UserCheck className="h-4 w-4 text-blue-600"/></div>
                         <div className="flex-1 overflow-hidden">
                             <p className="text-xs text-blue-500 font-bold uppercase">Conta</p>
@@ -235,7 +259,7 @@ export default function Auth() {
             {step === 'CREATE_PASSWORD' && (
                 <form onSubmit={handleFirstAccess} className="space-y-4 animate-in fade-in slide-in-from-right-8">
                     <div className="p-3 bg-green-50 rounded-lg border border-green-100 text-sm text-green-800 mb-2">
-                        Sua conta foi criada pelo administrador. Defina uma senha segura para ativar seu acesso.
+                        Sua conta foi pré-cadastrada pelo administrador. Defina sua senha pessoal para ativar o acesso.
                     </div>
                     
                     <div className="space-y-2">

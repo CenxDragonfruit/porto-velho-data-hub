@@ -1,32 +1,34 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { FileText, Clock, CheckCircle2, LayoutGrid, ArrowUpRight, Activity, Filter } from 'lucide-react';
+import { FileText, Clock, CheckCircle2, LayoutGrid, ArrowUpRight, Activity, Filter, Database } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
-import { format, subDays, startOfDay, endOfDay, isSameDay, parseISO } from 'date-fns';
+import { format, subDays, isSameDay, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 export default function Dashboard() {
   const [stats, setStats] = useState({ total: 0, active_systems: 0, pending: 0, approved: 0 });
   const [chartData, setChartData] = useState<any[]>([]);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  
-  // Estados para o Filtro
   const [modulesList, setModulesList] = useState<any[]>([]);
   const [selectedModule, setSelectedModule] = useState<string>('all');
+  const [loading, setLoading] = useState(true);
 
-  // 1. Carregar lista de módulos para o Select
+  // 1. Carregar lista de módulos para o filtro
   useEffect(() => {
     const fetchModules = async () => {
-      const { data } = await supabase.from('crud_modules').select('id, name').eq('is_active', true);
+      const { data } = await supabase
+        .from('modulos')
+        .select('id, nome')
+        .eq('ativo', true)
+        .order('nome');
       setModulesList(data || []);
     };
     fetchModules();
   }, []);
 
-  // 2. Carregar Dados do Dashboard (Sempre que mudar o filtro)
+  // 2. Carregar Dados do Dashboard quando o filtro mudar
   useEffect(() => {
     fetchDashboardData();
   }, [selectedModule]);
@@ -34,82 +36,105 @@ export default function Dashboard() {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      // --- BASE QUERY BUILDERS ---
-      // Função auxiliar para aplicar o filtro de módulo se necessário
-      const applyFilter = (query: any) => {
-        if (selectedModule !== 'all') {
-          // Usa !inner para forçar o join e permitir filtrar pela tabela relacionada
-          return query.select('*, crud_tables!inner(crud_module_id)', { count: 'exact', head: true })
-                      .eq('crud_tables.crud_module_id', selectedModule);
+      const moduleId = selectedModule === 'all' ? null : Number(selectedModule);
+
+      // --- HELPER: CONTAGEM OTIMIZADA ---
+      const getCount = async (status?: 'PENDENTE' | 'OFICIAL' | 'RASCUNHO') => {
+        // Se filtramos por módulo, precisamos fazer o JOIN com registros_mestre
+        let query = supabase
+            .from('versoes_registro')
+            .select(moduleId ? 'id, registros_mestre!inner(modulo_id)' : 'id', { count: 'exact', head: true })
+            .eq('is_atual', true);
+
+        if (status) {
+            query = query.eq('status', status);
         }
-        return query.select('*', { count: 'exact', head: true });
+
+        if (moduleId) {
+            query = query.eq('registros_mestre.modulo_id', moduleId);
+        }
+
+        const { count, error } = await query;
+        if (error) throw error;
+        return count || 0;
       };
 
-      // 1. STATS: Contagens Totais
-      const totalPromise = applyFilter(supabase.from('crud_records'));
-      const pendingPromise = applyFilter(supabase.from('crud_records')).eq('status', 'pending');
-      const approvedPromise = applyFilter(supabase.from('crud_records')).eq('status', 'approved');
+      // 1. EXECUÇÃO DAS CONTAGENS (Paralelo para performance)
+      const [total, pending, approved] = await Promise.all([
+        getCount(),              // Total de registros ativos
+        getCount('PENDENTE'),    // Pendentes de aprovação
+        getCount('OFICIAL')      // Registros oficiais
+      ]);
       
-      // Contagem de sistemas (se filtro estiver ativo, é sempre 1, senão conta todos)
-      const systemsCount = selectedModule === 'all' 
-        ? (await supabase.from('crud_modules').select('*', { count: 'exact', head: true }).eq('is_active', true)).count 
-        : 1;
+      // Contagem de sistemas
+      let systemsCount = 0;
+      if (moduleId) {
+        systemsCount = 1;
+      } else {
+        const { count } = await supabase
+            .from('modulos')
+            .select('*', { count: 'exact', head: true })
+            .eq('ativo', true);
+        systemsCount = count || 0;
+      }
 
-      // 2. RECENT ACTIVITY: Busca registros recentes
+      // 2. ATIVIDADE RECENTE (JOIN COMPLETO)
+      // Buscamos: Versão -> Mestre -> Módulo (para pegar o nome do sistema)
       let recentQuery = supabase
-        .from('crud_records')
-        .select('*, crud_tables!inner ( name, crud_module_id, crud_modules ( name ) )')
-        .order('created_at', { ascending: false })
+        .from('versoes_registro')
+        .select(`
+            id, 
+            status, 
+            criado_em, 
+            registros_mestre!inner ( 
+                modulos ( nome ) 
+            )
+        `)
+        .order('criado_em', { ascending: false })
         .limit(5);
       
-      if (selectedModule !== 'all') {
-        recentQuery = recentQuery.eq('crud_tables.crud_module_id', selectedModule);
+      if (moduleId) {
+        recentQuery = recentQuery.eq('registros_mestre.modulo_id', moduleId);
       }
 
-      // 3. CHART DATA: Busca registros dos últimos 7 dias (Otimizado: 1 query só)
+      // 3. DADOS DO GRÁFICO (Últimos 7 dias)
       const sevenDaysAgo = subDays(new Date(), 7).toISOString();
       let chartQuery = supabase
-        .from('crud_records')
-        .select('created_at, crud_tables!inner(crud_module_id)')
-        .gte('created_at', sevenDaysAgo);
+        .from('versoes_registro')
+        .select('criado_em, registros_mestre!inner(modulo_id)')
+        .gte('criado_em', sevenDaysAgo);
 
-      if (selectedModule !== 'all') {
-        chartQuery = chartQuery.eq('crud_tables.crud_module_id', selectedModule);
+      if (moduleId) {
+        chartQuery = chartQuery.eq('registros_mestre.modulo_id', moduleId);
       }
 
-      // --- EXECUÇÃO PARALELA ---
-      const [
-        { count: total }, 
-        { count: pending }, 
-        { count: approved }, 
-        { data: recent },
-        { data: chartRaw }
-      ] = await Promise.all([
-        totalPromise, 
-        pendingPromise, 
-        approvedPromise, 
-        recentQuery, 
+      // --- FINALIZAR PROMISES DE DADOS ---
+      const [{ data: recent }, { data: chartRaw }] = await Promise.all([
+        recentQuery,
         chartQuery
       ]);
 
       // --- PROCESSAMENTO DO GRÁFICO (JS) ---
+      // Agrupa os dados por dia
       const days = Array.from({ length: 7 }, (_, i) => subDays(new Date(), 6 - i));
       const processedChart = days.map(day => {
-        const count = (chartRaw || []).filter((r: any) => isSameDay(parseISO(r.created_at), day)).length;
+        const count = (chartRaw || []).filter((r: any) => isSameDay(parseISO(r.criado_em), day)).length;
         return { name: format(day, 'dd/MM'), registros: count };
       });
 
+      // --- ATUALIZA ESTADOS ---
       setStats({ 
         total: total || 0, 
         active_systems: systemsCount || 0, 
         pending: pending || 0, 
         approved: approved || 0 
       });
+      
       setRecentActivity(recent || []);
       setChartData(processedChart);
 
     } catch (error) { 
-      console.error("Erro dashboard:", error); 
+      console.error("Erro ao carregar dashboard:", error); 
     } finally { 
       setLoading(false); 
     }
@@ -124,8 +149,8 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Visão Geral</h1>
           <p className="text-sm text-slate-500">
             {selectedModule === 'all' 
-              ? 'Acompanhe as métricas de todos os sistemas.' 
-              : 'Visualizando dados filtrados por módulo.'}
+              ? 'Acompanhe as métricas consolidada de todos os sistemas.' 
+              : 'Visualizando dados filtrados especificamente por sistema.'}
           </p>
         </div>
         
@@ -140,7 +165,7 @@ export default function Dashboard() {
             <SelectContent>
               <SelectItem value="all" className="font-medium text-[#003B8F]">Todos os Sistemas</SelectItem>
               {modulesList.map(mod => (
-                <SelectItem key={mod.id} value={mod.id}>{mod.name}</SelectItem>
+                <SelectItem key={mod.id} value={mod.id.toString()}>{mod.nome}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -149,18 +174,19 @@ export default function Dashboard() {
 
       {/* STATS CARDS */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <StatsCard title="Registros Totais" value={stats.total} icon={FileText} loading={loading} />
+        <StatsCard title="Registros Ativos" value={stats.total} icon={FileText} loading={loading} />
         <StatsCard title="Sistemas Monitorados" value={stats.active_systems} icon={LayoutGrid} loading={loading} />
-        <StatsCard title="Pendentes" value={stats.pending} icon={Clock} loading={loading} highlight />
-        <StatsCard title="Aprovados" value={stats.approved} icon={CheckCircle2} loading={loading} />
+        <StatsCard title="Pendentes (Análise)" value={stats.pending} icon={Clock} loading={loading} highlight />
+        <StatsCard title="Dados Oficiais" value={stats.approved} icon={CheckCircle2} loading={loading} />
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
-        {/* GRÁFICO */}
+        
+        {/* GRÁFICO DE ENTRADA */}
         <Card className="lg:col-span-4 border border-slate-200 shadow-sm rounded-xl overflow-hidden bg-white">
           <CardHeader className="pb-2 border-b border-slate-50">
             <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
-                <Activity className="h-4 w-4 text-[#003B8F]" /> Fluxo de Entrada
+                <Activity className="h-4 w-4 text-[#003B8F]" /> Fluxo de Entrada de Dados (7 dias)
             </CardTitle>
           </CardHeader>
           <CardContent className="pl-0 pt-6 pr-4">
@@ -191,7 +217,7 @@ export default function Dashboard() {
         <Card className="lg:col-span-3 border border-slate-200 shadow-sm rounded-xl bg-white">
           <CardHeader className="border-b border-slate-50">
               <CardTitle className="text-base font-semibold text-slate-800">
-                {selectedModule === 'all' ? 'Últimas Atividades' : 'Atividades deste Sistema'}
+                {selectedModule === 'all' ? 'Últimas Movimentações' : 'Atividades deste Sistema'}
               </CardTitle>
           </CardHeader>
           <CardContent className="pt-6">
@@ -203,7 +229,7 @@ export default function Dashboard() {
                     <div className="bg-slate-50 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
                         <FileText className="h-6 w-6 text-slate-300" />
                     </div>
-                    <p className="text-sm text-slate-400">Sem registros recentes.</p>
+                    <p className="text-sm text-slate-400">Nenhuma atividade recente.</p>
                  </div>
               ) : (
                 recentActivity.map((item) => (
@@ -213,11 +239,12 @@ export default function Dashboard() {
                           <ArrowUpRight className="h-3.5 w-3.5" />
                       </div>
                       <div>
+                        {/* Acesso Seguro ao Nome do Módulo */}
                         <p className="text-sm font-medium text-slate-700 leading-none mb-1 group-hover:text-[#003B8F] transition-colors">
-                          {item.crud_tables?.crud_modules?.name}
+                          {item.registros_mestre?.modulos?.nome || 'Sistema Desconhecido'}
                         </p>
                         <p className="text-xs text-slate-500">
-                          {item.crud_tables?.name} • <span className="text-slate-400">{format(new Date(item.created_at), "d 'de' MMM, HH:mm", { locale: ptBR })}</span>
+                           Movimentação de Dado • <span className="text-slate-400">{format(new Date(item.criado_em), "d 'de' MMM, HH:mm", { locale: ptBR })}</span>
                         </p>
                       </div>
                     </div>
@@ -242,7 +269,7 @@ function StatsCard({ title, value, icon: Icon, loading, highlight }: any) {
         <div className="flex items-center justify-between space-y-0 pb-2">
           <span className={`text-sm font-medium ${highlight ? 'text-amber-700' : 'text-slate-500'}`}>{title}</span>
           <div className={`p-2 rounded-lg ${highlight ? 'bg-amber-100 text-amber-600' : 'bg-slate-50 text-slate-400'}`}>
-             <Icon className="h-4 w-4" />
+              <Icon className="h-4 w-4" />
           </div>
         </div>
         <div className="text-2xl font-bold text-slate-800 mt-2">
@@ -255,15 +282,24 @@ function StatsCard({ title, value, icon: Icon, loading, highlight }: any) {
 
 function StatusBadge({ status }: { status: string }) {
     const styles: any = {
-        pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-        approved: 'bg-green-50 text-green-700 border-green-200',
-        rejected: 'bg-red-50 text-red-700 border-red-200'
+        PENDENTE: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+        OFICIAL: 'bg-green-50 text-green-700 border-green-200',
+        REJEITADO: 'bg-red-50 text-red-700 border-red-200',
+        RASCUNHO: 'bg-slate-50 text-slate-600 border-slate-200',
+        OBSOLETO: 'bg-gray-100 text-gray-500 border-gray-200'
     };
-    const labels: any = { pending: 'Análise', approved: 'Aprovado', rejected: 'Negado' };
+    
+    const labels: any = { 
+        PENDENTE: 'Em Análise', 
+        OFICIAL: 'Oficial', 
+        REJEITADO: 'Rejeitado',
+        RASCUNHO: 'Rascunho',
+        OBSOLETO: 'Obsoleto'
+    };
     
     return (
         <span className={`text-[10px] font-medium px-2.5 py-0.5 rounded-full border ${styles[status] || 'bg-slate-100 text-slate-600'}`}>
-            {labels[status]}
+            {labels[status] || status}
         </span>
     );
 }

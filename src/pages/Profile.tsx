@@ -7,159 +7,245 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { User as UserIcon, Lock, Mail, Loader2, Save, ShieldCheck, LayoutGrid } from 'lucide-react';
+import { User as UserIcon, Lock, Mail, Loader2, Save, ShieldCheck, LayoutGrid, KeyRound } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 export default function Profile() {
-  const { user, profile, role } = useAuth();
+  const { userData, role, user } = useAuth(); // Usando userData do contexto atualizado
   const [loading, setLoading] = useState(false);
   
+  // Estados do Formulário
   const [fullName, setFullName] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   
-  // Lista de sistemas vinculados ao usuário
+  // Lista de sistemas vinculados (RF-003)
   const [myModules, setMyModules] = useState<any[]>([]);
 
   useEffect(() => {
-    if (profile?.full_name) setFullName(profile.full_name);
-    fetchMyAccess();
-  }, [profile]);
+    if (userData) {
+        setFullName(userData.nome_completo || '');
+        fetchMyAccess();
+    }
+  }, [userData]);
 
+  // Busca os módulos que o usuário tem permissão de visualizar
   const fetchMyAccess = async () => {
-      if(!profile) return;
-      if (role === 'administrador') return; // Admin tem acesso a tudo, não precisa listar
+      if (!userData) return;
+      
+      // Se for ADMIN, ele vê tudo, mas aqui listamos o que está explicitamente vinculado
+      // ou podemos mostrar uma mensagem de "Acesso Total".
+      if (role === 'ADMINISTRADOR') return; 
 
-      const { data } = await supabase
-        .from('profile_modules')
-        .select('crud_modules (name, description)')
-        .eq('profile_id', profile.id);
-      
-      // CORREÇÃO AQUI: Filtramos itens nulos antes de salvar no estado
-      const modules = data
-        ?.map((item: any) => item.crud_modules)
-        .filter((mod: any) => mod !== null) || []; // Remove nulos
-      
-      setMyModules(modules);
+      try {
+          const { data, error } = await supabase
+            .from('permissoes_modulo')
+            .select(`
+                modulo_id,
+                modulos (
+                    id,
+                    nome,
+                    descricao
+                )
+            `)
+            .eq('usuario_id', userData.id)
+            .eq('pode_visualizar', true)
+            .eq('modulos.ativo', true); // Apenas módulos ativos
+
+          if (error) throw error;
+          
+          // Filtra e mapeia os dados para evitar nulos
+          const modules = data
+            ?.map((item: any) => item.modulos)
+            .filter((mod: any) => mod !== null) || [];
+          
+          setMyModules(modules);
+      } catch (err) {
+          console.error("Erro ao buscar módulos:", err);
+      }
   };
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const { error } = await supabase.from('profiles').update({ full_name: fullName }).eq('id', profile?.id);
+      // Atualiza na tabela de negócio 'usuarios'
+      const { error } = await supabase
+        .from('usuarios')
+        .update({ nome_completo: fullName })
+        .eq('id', userData?.id);
+
       if (error) throw error;
+      
+      // Opcional: Se quiser atualizar o metadado do Auth também (não obrigatório, mas bom para consistência)
+      // await supabase.auth.updateUser({ data: { nome_completo: fullName } });
+
       toast.success('Perfil atualizado com sucesso!');
-    } catch (error: any) { toast.error('Erro ao atualizar: ' + error.message); } 
-    finally { setLoading(false); }
+    } catch (error: any) { 
+        toast.error('Erro ao atualizar: ' + error.message); 
+    } finally { 
+        setLoading(false); 
+    }
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword !== confirmPassword) return toast.error('Senhas não conferem.');
-    if (newPassword.length < 6) return toast.error('Mínimo 6 caracteres.');
+    if (newPassword.length < 6) return toast.error('A senha deve ter no mínimo 6 caracteres.');
 
     setLoading(true);
     try {
+      // Atualiza a senha no Supabase Auth (Segurança NF-001)
       const { error } = await supabase.auth.updateUser({ password: newPassword });
+      
       if (error) throw error;
-      toast.success('Senha alterada!');
-      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
-    } catch (error: any) { toast.error(error.message); } 
-    finally { setLoading(false); }
+      
+      toast.success('Senha alterada com sucesso!');
+      setCurrentPassword(''); 
+      setNewPassword(''); 
+      setConfirmPassword('');
+    } catch (error: any) { 
+        toast.error('Erro ao alterar senha: ' + error.message); 
+    } finally { 
+        setLoading(false); 
+    }
   };
 
   return (
-      <div className="max-w-4xl mx-auto pb-20 pt-6 animate-in fade-in">
-        <h1 className="text-3xl font-bold mb-2 text-slate-900">Meu Perfil</h1>
-        <p className="text-slate-500 mb-8">Gerencie suas informações e veja seus níveis de acesso.</p>
+      <div className="max-w-5xl mx-auto pb-20 pt-8 animate-in fade-in px-4">
+        <div className="flex items-center gap-3 mb-2">
+            <div className="p-3 bg-blue-50 rounded-full">
+                <UserIcon className="w-6 h-6 text-[#003B8F]" />
+            </div>
+            <div>
+                <h1 className="text-2xl font-bold text-slate-900">Meu Perfil</h1>
+                <p className="text-slate-500 text-sm">Gerencie suas informações pessoais e credenciais.</p>
+            </div>
+        </div>
 
-        <div className="grid gap-6 md:grid-cols-[1fr_300px]">
-            {/* Coluna Principal: Forms */}
+        <div className="grid gap-8 lg:grid-cols-[1fr_320px] mt-8">
+            
+            {/* COLUNA PRINCIPAL */}
             <Tabs defaultValue="general" className="w-full">
-                <TabsList className="grid w-full grid-cols-2 lg:w-[400px]">
-                    <TabsTrigger value="general">Geral</TabsTrigger>
+                <TabsList className="grid w-full grid-cols-2 lg:w-[400px] mb-6">
+                    <TabsTrigger value="general">Dados Pessoais</TabsTrigger>
                     <TabsTrigger value="security">Segurança</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="general" className="space-y-6 mt-6">
-                    <Card>
-                        <CardHeader><CardTitle>Informações Pessoais</CardTitle><CardDescription>Dados visíveis no sistema.</CardDescription></CardHeader>
-                        <CardContent>
-                            <form onSubmit={handleUpdateProfile} className="space-y-4">
-                                <div className="space-y-2">
-                                    <Label>Nome Completo</Label>
+                <TabsContent value="general" className="space-y-6">
+                    <Card className="border-slate-200 shadow-sm">
+                        <CardHeader className="pb-4 border-b bg-slate-50/50">
+                            <CardTitle className="text-base flex items-center gap-2">
+                                <UserIcon className="w-4 h-4 text-slate-500"/> Informações Básicas
+                            </CardTitle>
+                            <CardDescription>Estes dados são visíveis para administradores do sistema.</CardDescription>
+                        </CardHeader>
+                        <CardContent className="pt-6">
+                            <form onSubmit={handleUpdateProfile} className="space-y-5">
+                                <div className="grid gap-2">
+                                    <Label htmlFor="name">Nome Completo</Label>
                                     <div className="relative">
                                         <UserIcon className="absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
-                                        <Input value={fullName} onChange={(e) => setFullName(e.target.value)} className="pl-10" />
+                                        <Input id="name" value={fullName} onChange={(e) => setFullName(e.target.value)} className="pl-10 h-11" />
                                     </div>
                                 </div>
-                                <div className="space-y-2">
-                                    <Label>E-mail (Login)</Label>
+                                
+                                <div className="grid gap-2">
+                                    <Label>E-mail Corporativo</Label>
                                     <div className="relative">
                                         <Mail className="absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
-                                        <Input value={user?.email} disabled className="pl-10 bg-slate-50 text-slate-500" />
+                                        <Input value={userData?.email || user?.email} disabled className="pl-10 h-11 bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed" />
                                     </div>
+                                    <p className="text-[11px] text-slate-400">O e-mail não pode ser alterado. Contate o suporte se necessário.</p>
                                 </div>
-                                <Button type="submit" disabled={loading} className="bg-[#003B8F]">{loading ? <Loader2 className="animate-spin mr-2 h-4 w-4"/> : <Save className="mr-2 h-4 w-4"/>} Salvar</Button>
+
+                                <div className="flex justify-end pt-2">
+                                    <Button type="submit" disabled={loading} className="bg-[#003B8F] hover:bg-blue-800 min-w-[140px]">
+                                        {loading ? <Loader2 className="animate-spin mr-2 h-4 w-4"/> : <Save className="mr-2 h-4 w-4"/>} 
+                                        Salvar Dados
+                                    </Button>
+                                </div>
                             </form>
                         </CardContent>
                     </Card>
                 </TabsContent>
 
-                <TabsContent value="security" className="mt-6">
-                    <Card>
-                        <CardHeader><CardTitle>Trocar Senha</CardTitle><CardDescription>Defina uma nova senha de acesso.</CardDescription></CardHeader>
-                        <CardContent>
-                            <form onSubmit={handleChangePassword} className="space-y-4">
-                                <div className="space-y-2">
-                                    <Label>Nova Senha</Label>
-                                    <div className="relative"><Lock className="absolute left-3 top-2.5 h-5 w-5 text-slate-400" /><Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="pl-10" required /></div>
+                <TabsContent value="security">
+                    <Card className="border-slate-200 shadow-sm">
+                        <CardHeader className="pb-4 border-b bg-slate-50/50">
+                            <CardTitle className="text-base flex items-center gap-2">
+                                <KeyRound className="w-4 h-4 text-slate-500"/> Alterar Senha
+                            </CardTitle>
+                            <CardDescription>Recomendamos o uso de senhas fortes com no mínimo 6 caracteres.</CardDescription>
+                        </CardHeader>
+                        <CardContent className="pt-6">
+                            <form onSubmit={handleChangePassword} className="space-y-5">
+                                <div className="grid gap-2">
+                                    <Label htmlFor="new-pass">Nova Senha</Label>
+                                    <div className="relative">
+                                        <Lock className="absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                                        <Input id="new-pass" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="pl-10 h-11" required />
+                                    </div>
                                 </div>
-                                <div className="space-y-2">
-                                    <Label>Confirmar Senha</Label>
-                                    <div className="relative"><Lock className="absolute left-3 top-2.5 h-5 w-5 text-slate-400" /><Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="pl-10" required /></div>
+                                <div className="grid gap-2">
+                                    <Label htmlFor="confirm-pass">Confirmar Nova Senha</Label>
+                                    <div className="relative">
+                                        <Lock className="absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
+                                        <Input id="confirm-pass" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="pl-10 h-11" required />
+                                    </div>
                                 </div>
-                                <Button type="submit" variant="destructive" disabled={loading}>Redefinir Senha</Button>
+                                <div className="flex justify-end pt-2">
+                                    <Button type="submit" variant="destructive" disabled={loading} className="min-w-[140px]">
+                                        {loading ? <Loader2 className="animate-spin mr-2 h-4 w-4"/> : <Save className="mr-2 h-4 w-4"/>} 
+                                        Atualizar Senha
+                                    </Button>
+                                </div>
                             </form>
                         </CardContent>
                     </Card>
                 </TabsContent>
             </Tabs>
 
-            {/* Coluna Lateral: Permissões */}
+            {/* COLUNA LATERAL - INFO DE ACESSO */}
             <div className="space-y-6">
-                <Card className="bg-slate-50 border-slate-200">
-                    <CardHeader className="pb-3">
-                        <div className="flex items-center gap-2">
-                            <ShieldCheck className="h-5 w-5 text-[#003B8F]" />
-                            <CardTitle className="text-base">Permissões</CardTitle>
+                <Card className="bg-gradient-to-br from-white to-slate-50 border-slate-200 shadow-sm">
+                    <CardHeader className="pb-4 border-b">
+                        <div className="flex items-center gap-2 text-[#003B8F]">
+                            <ShieldCheck className="h-5 w-5" />
+                            <CardTitle className="text-base font-bold">Suas Credenciais</CardTitle>
                         </div>
                     </CardHeader>
-                    <CardContent>
-                        <div className="mb-4">
-                            <span className="text-xs font-bold text-slate-400 uppercase">Função Atual</span>
-                            <div className="mt-1"><Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200">{role?.toUpperCase() || 'USUÁRIO'}</Badge></div>
+                    <CardContent className="pt-6 space-y-6">
+                        <div>
+                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Perfil de Acesso</span>
+                            <Badge className={`px-3 py-1 text-sm font-semibold ${role === 'ADMINISTRADOR' ? 'bg-[#003B8F] text-white hover:bg-blue-800' : 'bg-green-100 text-green-700 hover:bg-green-200 border-green-200'}`}>
+                                {role || 'Carregando...'}
+                            </Badge>
                         </div>
                         
                         <div>
-                            <span className="text-xs font-bold text-slate-400 uppercase mb-2 block">Sistemas Liberados</span>
-                            {role === 'administrador' ? (
-                                <p className="text-sm text-slate-600 italic">Acesso total a todos os sistemas.</p>
+                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Módulos Liberados</span>
+                            
+                            {role === 'ADMINISTRADOR' ? (
+                                <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-700">
+                                    <p className="font-medium">Acesso Irrestrito</p>
+                                    <p className="text-xs opacity-80 mt-1">Como administrador, você tem acesso total a todos os sistemas.</p>
+                                </div>
                             ) : myModules.length > 0 ? (
-                                <ul className="space-y-2">
-                                    {myModules.map((m: any, i) => (
-                                        // CORREÇÃO AQUI: Verificamos se 'm' existe antes de renderizar
-                                        m ? (
-                                            <li key={i} className="flex items-center gap-2 text-sm text-slate-700 bg-white p-2 rounded border border-slate-100">
-                                                <LayoutGrid className="h-3 w-3 text-slate-400" /> {m?.name || 'Sem nome'}
-                                            </li>
-                                        ) : null
+                                <ul className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                                    {myModules.map((m: any) => (
+                                        <li key={m.id} className="flex items-center gap-2.5 text-sm text-slate-700 bg-white p-2.5 rounded-lg border border-slate-200 shadow-sm hover:border-blue-300 transition-colors">
+                                            <div className="p-1.5 bg-blue-50 rounded text-blue-600"><LayoutGrid className="h-3.5 w-3.5" /></div>
+                                            <span className="font-medium">{m.nome}</span>
+                                        </li>
                                     ))}
                                 </ul>
                             ) : (
-                                <p className="text-sm text-slate-500 italic">Nenhum sistema vinculado.</p>
+                                <div className="text-center p-6 bg-slate-50 rounded-lg border border-dashed border-slate-200">
+                                    <p className="text-sm text-slate-500 italic">Nenhum sistema vinculado.</p>
+                                    <p className="text-xs text-slate-400 mt-1">Solicite acesso ao seu supervisor.</p>
+                                </div>
                             )}
                         </div>
                     </CardContent>

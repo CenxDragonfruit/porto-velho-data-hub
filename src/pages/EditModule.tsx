@@ -6,213 +6,301 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Trash2, Save, ArrowLeft, X, Loader2 } from 'lucide-react';
+import { 
+    Plus, Trash2, Save, ArrowLeft, X, Loader2, List, Type, Hash, 
+    DollarSign, Calendar, Clock, CheckSquare, Settings, PlusCircle 
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 
-// --- SUB-COMPONENTE DE LINHA ---
-const FieldRow = ({ field, onUpdate, onRemove }: any) => {
-  const [newOption, setNewOption] = useState('');
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4 border rounded-lg bg-white space-y-4">
-      <div className="grid gap-4 md:grid-cols-12 items-end">
-        <div className="md:col-span-4"><Label className="text-xs">Rótulo</Label><Input value={field.label} onChange={(e) => onUpdate(field.id, { label: e.target.value })} /></div>
-        <div className="md:col-span-3"><Label className="text-xs">Tipo</Label>
-          <Select value={field.field_type} onValueChange={(v) => onUpdate(field.id, { field_type: v })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-                <SelectItem value="text">Texto</SelectItem>
-                <SelectItem value="number">Número</SelectItem>
-                <SelectItem value="date">Data</SelectItem>
-                <SelectItem value="select">Seleção</SelectItem>
-                <SelectItem value="textarea">Área de Texto</SelectItem>
-                <SelectItem value="email">E-mail</SelectItem>
-                <SelectItem value="cpf">CPF</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="md:col-span-3 flex items-center gap-2 pb-2">
-            <Switch checked={field.is_required} onCheckedChange={(c) => onUpdate(field.id, { is_required: c })} />
-            <span className="text-xs">Obrigatório</span>
-        </div>
-        <div className="md:col-span-2 text-right">
-            <Button variant="ghost" size="icon" onClick={() => onRemove(field.id)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
-        </div>
-      </div>
-      {field.field_type === 'select' && (
-        <div className="bg-slate-50 p-3 rounded">
-            <div className="flex flex-wrap gap-2 mb-2">
-                {field.options?.map((opt:any, i:number) => (
-                    <span key={i} className="bg-white border px-2 py-1 rounded text-xs flex items-center gap-1">{opt.label} <X className="h-3 w-3 cursor-pointer" onClick={() => {
-                        const opts = field.options.filter((_:any, idx:number) => idx !== i);
-                        onUpdate(field.id, { options: opts });
-                    }}/></span>
-                ))}
-            </div>
-            <div className="flex gap-2">
-                <Input value={newOption} onChange={e=>setNewOption(e.target.value)} placeholder="Nova opção" className="h-8 text-xs" />
-                <Button size="sm" variant="outline" onClick={() => {
-                    if(newOption) {
-                        const val = newOption.toLowerCase().replace(/[^a-z0-9]/g, '_');
-                        onUpdate(field.id, { options: [...(field.options||[]), { label: newOption, value: val }] });
-                        setNewOption('');
-                    }
-                }}>Add</Button>
-            </div>
-        </div>
-      )}
-    </motion.div>
-  );
+// --- (Mantive o FieldRow e TYPE_ICONS iguais ao seu código para economizar espaço, eles estavam corretos) ---
+const TYPE_ICONS: any = {
+    TEXTO: Type, TEXTO_LONGO: List, INTEIRO: Hash, DECIMAL: DollarSign,
+    DATA: Calendar, HORA: Clock, CPF: CheckSquare, SELECAO_LISTA: List
 };
+const generateTempId = () => `temp_${Math.random().toString(36).substr(2, 9)}`;
+
+const FieldRow = ({ field, onUpdate, onRemove }: any) => {
+    // ... (Seu código do FieldRow aqui. Ele estava ótimo) ...
+    const [newOption, setNewOption] = useState('');
+    const Icon = TYPE_ICONS[field.tipo] || Type;
+
+    return (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-4 border rounded-xl bg-white space-y-4 shadow-sm hover:border-blue-300 transition-all group">
+            <div className="flex flex-col md:flex-row gap-4 items-start md:items-end">
+                <div className="flex-1 w-full space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nome do Campo</Label>
+                    <Input value={field.label_visual} onChange={(e) => onUpdate(field.id, { label_visual: e.target.value })} className="font-medium h-9" />
+                </div>
+                <div className="w-full md:w-[200px] space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tipo de Dado</Label>
+                    <Select value={field.tipo} onValueChange={(v) => onUpdate(field.id, { tipo: v })}>
+                        <SelectTrigger className="h-9"><div className="flex items-center gap-2"><Icon className="w-3.5 h-3.5 text-slate-500" /><SelectValue /></div></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="TEXTO">Texto Curto</SelectItem>
+                            <SelectItem value="TEXTO_LONGO">Texto Longo</SelectItem>
+                            <SelectItem value="INTEIRO">Número Inteiro</SelectItem>
+                            <SelectItem value="DECIMAL">Valor Monetário</SelectItem>
+                            <SelectItem value="DATA">Data</SelectItem>
+                            <SelectItem value="HORA">Hora</SelectItem>
+                            <SelectItem value="SELECAO_LISTA">Lista de Opções</SelectItem>
+                            <SelectItem value="CPF">CPF</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="flex items-center gap-4 pb-2">
+                    <div className="flex items-center gap-2 cursor-pointer" onClick={() => onUpdate(field.id, { obrigatorio: !field.obrigatorio })}>
+                        <Switch checked={field.obrigatorio} onCheckedChange={(c) => onUpdate(field.id, { obrigatorio: c })} />
+                        <span className="text-xs font-medium text-slate-600">Obrigatório</span>
+                    </div>
+                    <div className="h-6 w-px bg-slate-200 mx-2" />
+                    <Button variant="ghost" size="icon" onClick={() => onRemove(field.id)} className="h-8 w-8 text-slate-300 hover:text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
+                </div>
+            </div>
+            {field.tipo === 'SELECAO_LISTA' && (
+                <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                    <Label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Opções da Lista</Label>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                        {field.options?.map((opt:any, i:number) => (
+                            <span key={i} className="bg-white border px-2.5 py-1 rounded-full text-xs font-medium text-slate-700 flex items-center gap-1.5 shadow-sm">
+                                {opt.label} <X className="h-3 w-3 cursor-pointer text-slate-400 hover:text-red-500" onClick={() => {
+                                    const newOptions = field.options.filter((_:any, idx:number) => idx !== i);
+                                    onUpdate(field.id, { options: newOptions });
+                                }}/>
+                            </span>
+                        ))}
+                    </div>
+                    <div className="flex gap-2">
+                        <Input value={newOption} onChange={e=>setNewOption(e.target.value)} placeholder="Nova opção..." className="h-8 text-sm bg-white" 
+                            onKeyDown={(e) => {
+                                if(e.key === 'Enter' && newOption.trim()) {
+                                    e.preventDefault();
+                                    const val = newOption.trim();
+                                    const slug = val.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '_');
+                                    onUpdate(field.id, { options: [...(field.options||[]), { label: val, value: slug }] });
+                                    setNewOption('');
+                                }
+                            }}
+                        />
+                         <Button size="sm" variant="secondary" className="h-8" onClick={() => {
+                             if(newOption.trim()) {
+                                 const val = newOption.trim();
+                                 const slug = val.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '_');
+                                 onUpdate(field.id, { options: [...(field.options||[]), { label: val, value: slug }] });
+                                 setNewOption('');
+                             }
+                         }}>Add</Button>
+                    </div>
+                </div>
+            )}
+        </motion.div>
+    );
+};
+// --- FIM DO FIELD ROW ---
 
 export default function EditModule() {
   const { id } = useParams();
+  const moduleId = Number(id);
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   
-  const [moduleName, setModuleName] = useState('');
-  const [moduleDesc, setModuleDesc] = useState('');
-  
-  const [tables, setTables] = useState<any[]>([]);
-  const [activeTableId, setActiveTableId] = useState<string>('');
+  const [moduleData, setModuleData] = useState<any>({});
+  const [siblingModules, setSiblingModules] = useState<any[]>([]);
   const [fields, setFields] = useState<any[]>([]);
 
-  useEffect(() => { if (id) loadData(); }, [id]);
+  useEffect(() => { 
+      if (id && !isNaN(moduleId)) {
+          loadData(); 
+      } else {
+          toast.error("ID inválido");
+          navigate('/modulos');
+      }
+  }, [id]);
 
   const loadData = async () => {
-    try {
-        // 1. Módulo
-        const { data: mod } = await supabase.from('crud_modules').select('*').eq('id', id).single();
-        if(!mod) throw new Error("Módulo não encontrado");
-        setModuleName(mod.name);
-        setModuleDesc(mod.description || '');
-
-        // 2. Tabelas
-        const { data: tabs } = await supabase.from('crud_tables').select('*').eq('crud_module_id', id).order('created_at');
-        if(tabs && tabs.length > 0) {
-            setTables(tabs);
-            setActiveTableId(tabs[0].id); // Seleciona a primeira
-            loadFields(tabs[0].id);
-        } else {
-            setTables([]);
-        }
-    } catch(e) { console.error(e); navigate('/modulos'); } finally { setLoading(false); }
-  };
-
-  const loadFields = async (tableId: string) => {
-      setLoading(true);
-      const { data } = await supabase.from('crud_fields').select('*').eq('crud_table_id', tableId).order('order_index');
-      
-      // Normaliza options e adiciona flag isNew: false
-      const normalized = (data || []).map(f => ({
-          ...f,
-          options: typeof f.options === 'string' ? JSON.parse(f.options) : f.options,
-          isNew: false
-      }));
-      setFields(normalized);
-      setLoading(false);
-  };
-
-  const handleTableChange = (tId: string) => {
-      setActiveTableId(tId);
-      loadFields(tId);
-  };
-
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
     setLoading(true);
     try {
-        // Atualiza Módulo
-        await supabase.from('crud_modules').update({ name: moduleName, description: moduleDesc }).eq('id', id);
+        const { data: mod, error } = await supabase
+            .from('modulos')
+            .select('*, categorias_modulo(id, nome)')
+            .eq('id', moduleId)
+            .single();
+        
+        if(error || !mod) throw new Error("Módulo não encontrado");
+        setModuleData(mod);
 
-        // Atualiza Campos da Tabela Ativa
-        if (activeTableId) {
-            for (const f of fields) {
-                const payload = {
-                    crud_table_id: activeTableId,
-                    label: f.label,
-                    name: f.name || f.label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '_'),
-                    field_type: f.field_type,
-                    is_required: f.is_required,
-                    options: JSON.stringify(f.options),
-                    order_index: 0
-                };
-
-                if (f.isNew) {
-                    await supabase.from('crud_fields').insert(payload);
-                } else {
-                    await supabase.from('crud_fields').update(payload).eq('id', f.id);
-                }
-            }
+        // Carrega "irmãos" (tabelas do mesmo sistema)
+        if (mod.categoria_id) {
+            const { data: siblings } = await supabase
+                .from('modulos')
+                .select('id, nome')
+                .eq('categoria_id', mod.categoria_id)
+                .neq('id', moduleId);
+            setSiblingModules(siblings || []);
         }
-        toast.success("Salvo com sucesso!");
-        // Recarrega para limpar flags isNew
-        loadFields(activeTableId);
-    } catch(e: any) { toast.error(e.message); } finally { setLoading(false); }
+
+        const { data: cols } = await supabase
+            .from('definicao_colunas')
+            .select(`*, catalogos_dominio ( itens_catalogo ( valor_exibicao, chave ) )`)
+            .eq('modulo_id', moduleId)
+            .order('ordem');
+
+        const normalizedFields = (cols || []).map(c => {
+            let options: any[] = [];
+            if (c.catalogos_dominio?.itens_catalogo) {
+                options = c.catalogos_dominio.itens_catalogo.map((it:any) => ({
+                    label: it.valor_exibicao, value: it.chave
+                }));
+            }
+            return {
+                id: c.id, 
+                label_visual: c.label_visual,
+                nome_tecnico: c.nome_tecnico,
+                tipo: c.tipo,
+                obrigatorio: c.obrigatorio,
+                options: options,
+                isNew: false
+            };
+        });
+        setFields(normalizedFields);
+    } catch(e) { 
+        console.error(e); navigate('/modulos'); 
+    } finally { setLoading(false); }
   };
 
-  if (loading && !moduleName) return <div className="p-10 flex justify-center"><Loader2 className="animate-spin" /></div>;
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+        await supabase
+            .from('modulos')
+            .update({ nome: moduleData.nome, descricao: moduleData.descricao })
+            .eq('id', moduleId);
+
+        for (const [index, f] of fields.entries()) {
+            const payload = {
+                modulo_id: moduleId,
+                label_visual: f.label_visual,
+                // Mantém o nome técnico antigo se já existir para não quebrar dados, gera novo se for campo novo
+                nome_tecnico: f.isNew 
+                    ? f.label_visual.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '_')
+                    : f.nome_tecnico, 
+                tipo: f.tipo,
+                obrigatorio: f.obrigatorio,
+                ordem: index
+            };
+
+            if (f.isNew) {
+                await supabase.from('definicao_colunas').insert(payload);
+            } else {
+                await supabase.from('definicao_colunas').update(payload).eq('id', Number(f.id));
+            }
+        }
+        toast.success("Módulo atualizado com sucesso!");
+        loadData();
+    } catch(e: any) { 
+        toast.error("Erro ao salvar: " + e.message); 
+    } finally { setSaving(false); }
+  };
+
+  const handleDeleteField = async (fieldId: string | number, isNew: boolean) => {
+      if (isNew) {
+          setFields(prev => prev.filter(f => f.id !== fieldId));
+          return;
+      }
+      if (!confirm("Tem certeza? Dados dessa coluna serão perdidos.")) return;
+      try {
+          await supabase.from('definicao_colunas').delete().eq('id', Number(fieldId));
+          setFields(prev => prev.filter(f => f.id !== fieldId));
+          toast.success("Campo removido.");
+      } catch (e) { toast.error("Erro ao remover campo."); }
+  };
+
+  if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-[#003B8F]" /></div>;
 
   return (
-    <div className="max-w-4xl mx-auto pb-20 pt-8">
-       <Button variant="ghost" onClick={() => navigate('/modulos')} className="mb-4"><ArrowLeft className="mr-2 h-4 w-4" /> Voltar</Button>
-       <h1 className="text-3xl font-bold mb-6">Editar Estrutura</h1>
-
-       <div className="bg-white p-6 rounded-xl border shadow-sm mb-6 space-y-4">
-           <div><Label>Nome do Sistema</Label><Input value={moduleName} onChange={e=>setModuleName(e.target.value)} /></div>
-           <div><Label>Descrição</Label><Input value={moduleDesc} onChange={e=>setModuleDesc(e.target.value)} /></div>
+    <div className="max-w-5xl mx-auto pb-32 pt-8 px-4 animate-in fade-in">
+       <div className="flex items-center justify-between mb-6">
+           <Button variant="ghost" onClick={() => navigate('/modulos')} className="pl-0 text-slate-500 hover:text-[#003B8F]">
+                <ArrowLeft className="mr-2 h-4 w-4" /> Voltar
+           </Button>
+           <Button onClick={handleSave} disabled={saving} className="bg-[#22C55E] hover:bg-green-600 text-white shadow-md">
+                {saving ? <Loader2 className="animate-spin mr-2 h-4 w-4" /> : <Save className="mr-2 h-4 w-4" />}
+                {saving ? 'Salvando...' : 'Salvar Alterações'}
+           </Button>
        </div>
 
-       {tables.length > 0 ? (
-           <div className="space-y-4">
-               <Label>Tabelas do Sistema</Label>
-               <div className="flex gap-2 border-b pb-2 mb-4 overflow-x-auto">
-                   {tables.map(t => (
-                       <button 
-                         key={t.id} 
-                         onClick={() => handleTableChange(t.id)}
-                         className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTableId === t.id ? 'bg-[#003B8F] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                       >
-                           {t.name}
-                       </button>
-                   ))}
+       <div className="grid gap-8 lg:grid-cols-[300px_1fr]">
+           <div className="space-y-6">
+               <div className="bg-white p-5 rounded-xl border shadow-sm space-y-4">
+                   <h3 className="font-bold text-slate-800 text-lg border-b pb-2 flex items-center gap-2">
+                       <Settings className="w-5 h-5 text-slate-400"/> Configuração
+                   </h3>
+                   <div className="space-y-3">
+                       <div>
+                           <Label className="text-xs text-slate-500">Nome da Tabela</Label>
+                           <Input value={moduleData.nome || ''} onChange={e => setModuleData({...moduleData, nome: e.target.value})} className="font-semibold"/>
+                       </div>
+                       <div>
+                           <Label className="text-xs text-slate-500">Descrição</Label>
+                           <Input value={moduleData.descricao || ''} onChange={e => setModuleData({...moduleData, descricao: e.target.value})} />
+                       </div>
+                   </div>
                </div>
 
-               <div className="space-y-4 bg-slate-50 p-6 rounded-xl border">
-                   <div className="flex justify-between items-center">
-                       <h3 className="font-bold text-slate-700">Campos da Tabela</h3>
-                       <Button size="sm" onClick={() => setFields([...fields, { id: crypto.randomUUID(), isNew: true, field_type: 'text', options: [], label: 'Novo Campo' }])}>
-                           <Plus className="mr-2 h-4 w-4" /> Adicionar Campo
+               {/* PAINEL DE TABELAS IRMÃS */}
+               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                   <div className="flex justify-between items-center mb-3">
+                        <Label className="text-xs font-bold text-slate-500 uppercase">Tabelas do Sistema</Label>
+                   </div>
+                   <div className="space-y-2">
+                       {siblingModules.map(sib => (
+                           <Button key={sib.id} variant="outline" className="w-full justify-start text-slate-600 bg-white hover:bg-blue-50 hover:text-[#003B8F] border-slate-200"
+                               onClick={() => { setLoading(true); navigate(`/modulos/${sib.id}/edit`); window.location.reload(); }}
+                           >
+                               <List className="w-4 h-4 mr-2 opacity-70" /> {sib.nome}
+                           </Button>
+                       ))}
+                       
+                       {/* BOTÃO PARA ADICIONAR NOVA TABELA AO MESMO SISTEMA */}
+                       <Button 
+                            variant="ghost" 
+                            className="w-full justify-start text-[#003B8F] hover:bg-blue-100 mt-2"
+                            onClick={() => navigate('/modulos/novo')} // Idealmente passaria o categoria_id
+                        >
+                            <PlusCircle className="w-4 h-4 mr-2"/> Nova Tabela
                        </Button>
                    </div>
-                   
-                   {fields.map(f => (
-                       <FieldRow 
-                         key={f.id} 
-                         field={f} 
-                         onUpdate={(id:string, d:any) => setFields(fields.map(field => field.id === id ? { ...field, ...d } : field))}
-                         onRemove={(id:string) => {
-                             if(f.isNew) {
-                                setFields(fields.filter(field => field.id !== id));
-                             } else {
-                                if(confirm("Tem certeza? Isso apagará os dados deste campo.")) {
-                                    supabase.from('crud_fields').delete().eq('id', id).then(() => {
-                                        setFields(fields.filter(field => field.id !== id));
-                                        toast.success("Campo removido");
-                                    });
-                                }
-                             }
-                         }}
-                       />
-                   ))}
                </div>
            </div>
-       ) : (
-           <div className="p-8 text-center border-dashed border-2 rounded bg-slate-50">Nenhuma tabela encontrada neste módulo.</div>
-       )}
 
-       <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t flex justify-end lg:pl-80 z-50">
-           <Button onClick={handleSave} className="bg-[#22C55E] hover:bg-green-600 text-white shadow-lg"><Save className="mr-2 h-4 w-4" /> Salvar Alterações</Button>
+           <div className="space-y-4">
+               <div className="flex items-center justify-between bg-slate-100 p-3 rounded-lg border border-slate-200">
+                   <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                       <CheckSquare className="w-5 h-5 text-[#003B8F]"/> Colunas da Tabela
+                   </h3>
+                   <Button size="sm" onClick={() => setFields([...fields, { 
+                       id: generateTempId(), isNew: true, tipo: 'TEXTO', label_visual: 'Novo Campo', obrigatorio: false, options: [] 
+                   }])}>
+                       <Plus className="mr-2 h-4 w-4" /> Adicionar Campo
+                   </Button>
+               </div>
+
+               <div className="space-y-3 pb-20">
+                   {fields.length === 0 ? (
+                       <div className="text-center py-12 border-2 border-dashed rounded-xl bg-slate-50">
+                           <p className="text-slate-400">Nenhuma coluna definida.</p>
+                       </div>
+                   ) : (
+                       fields.map((f, i) => (
+                           <FieldRow key={f.id || i} field={f}
+                               onUpdate={(id:any, data:any) => setFields(fields.map(field => field.id === id ? { ...field, ...data } : field))}
+                               onRemove={(id:any) => handleDeleteField(id, f.isNew)}
+                           />
+                       ))
+                   )}
+               </div>
+           </div>
        </div>
     </div>
   );
